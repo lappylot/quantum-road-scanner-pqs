@@ -1193,11 +1193,7 @@ async def phf_filter_input(input_text):
             return "Safe" in openai_response, f"OpenAI: {openai_response.strip()}"
         else:
             logger.debug("OpenAI PHF check did not return expected keywords.")
-# --- Probabilistic Harm Filtering (PHF) — Google-free version ---
 
-import logging
-
-logger = logging.getLogger(__name__)
 
 async def phf_filter_input(input_text: str):
     """
