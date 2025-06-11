@@ -1193,32 +1193,68 @@ async def phf_filter_input(input_text):
             return "Safe" in openai_response, f"OpenAI: {openai_response.strip()}"
         else:
             logger.debug("OpenAI PHF check did not return expected keywords.")
-    except Exception as e:
-        logger.error("OpenAI PHF failed with error: %s", e, exc_info=True)
+# --- Probabilistic Harm Filtering (PHF) — Google-free version ---
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+async def phf_filter_input(input_text: str):
+    """
+    Run a single-provider PHF (OpenAI) check on `input_text`.
+    Returns (is_safe: bool, details: str)
+    """
+    logger.debug(
+        "Entering phf_filter_input with input_text of length %d",
+        len(input_text) if isinstance(input_text, str) else 0,
+    )
+
+    # Basic validation
+    if not input_text or not isinstance(input_text, str):
+        logger.warning("phf_filter_input received invalid or empty input_text.")
+        return False, "Invalid input."
+
+    # Build OpenAI-only prompt
+    openai_prompt = (
+        "The following content requires **Probabilistic Harm Filtering (PHF)** "
+        "to identify harmful or concerning elements.\n"
+        "Each category should be assessed individually and labeled as either **Safe** or **Flagged**.\n\n"
+        "### **Categories to Assess:**\n"
+        "1. **Violence** — explicit or encouraging references to violence\n"
+        "2. **Hate Speech** — targeted offensive language\n"
+        "3. **Self-Harm** — encouragement or intent of self-harm\n"
+        "4. **Harassment/Bullying** — degrading or demeaning language\n"
+        "5. **Illegal Activities** — explicit references to illegal acts\n"
+        "6. **Self-Disclosure** — personal info is OK unless harmful\n\n"
+        "[inspectthiscontent]\n"
+        f"\"{input_text}\"\n"
+        "---[/inspectthiscontent]\n"
+        "**Assessment Format**:\n"
+        "- Label each category as **Safe** or **Flagged**.\n"
+        "- Conclude with a **Final Recommendation**: Safe or Flagged.\n"
+    )
+
+    # Try OpenAI once
     try:
-        logger.debug("Attempting Gemini PHF check.")
-        gemini_response = model.generate_content(gemini_prompt)
-        if gemini_response and gemini_response.text:
-            gemini_analysis = gemini_response.text.strip().lower()
-            logger.debug("Gemini PHF response: %s", gemini_analysis)
-            if gemini_analysis == "safe":
-                logger.info("Gemini PHF check passed. Classified as Safe.")
-                return True, "Gemini: Safe"
-            elif gemini_analysis == "unsafe":
-                logger.info("Gemini PHF check passed. Classified as Unsafe.")
-                return False, "Gemini: Unsafe"
-            else:
-                logger.debug("Gemini PHF returned a response that did not match 'Safe' or 'Unsafe'.")
-        else:
-            logger.debug("Gemini PHF returned no usable response.")
+        logger.debug("Attempting OpenAI PHF check.")
+        openai_response = await run_openai_completion(openai_prompt)
+
+        if openai_response and ("Flagged" in openai_response or "Safe" in openai_response):
+            logger.info(
+                "OpenAI PHF check succeeded. Result: %s",
+                openai_response.strip(),
+            )
+            return "Safe" in openai_response, f"OpenAI: {openai_response.strip()}"
+
+        logger.debug("OpenAI PHF check did not return expected keywords.")
     except Exception as e:
-        logger.error("Gemini PHF failed with error: %s", e, exc_info=True)
+        logger.error("OpenAI PHF failed: %s", e, exc_info=True)
 
-    logger.warning("Both PHF models failed to process the input. Returning default Unsafe response.")
+    # Fallback
+    logger.warning("PHF processing failed. Returning default Unsafe response.")
     logger.debug("Exiting phf_filter_input.")
-    return False, "Both models failed to process the input."
-
+    return False, "PHF processing failed."
+    
 async def scan_debris_for_route(lat, lon, vehicle_type, destination, user_id, selected_model=None):
     logger.debug("Entering scan_debris_for_route with lat=%s, lon=%s, vehicle_type=%s, destination=%s, user_id=%s, selected_model=%s",
                  lat, lon, vehicle_type, destination, user_id, selected_model)
