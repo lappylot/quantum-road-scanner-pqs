@@ -1,0 +1,13 @@
+@font-face {
+  font-family: 'Roboto';
+  src: url('{{ url_for('static', filename='fonts/RobotoMono[wght].ttf') }}') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Orbitron';
+  src: url('{{ url_for('static', filename='fonts/Orbitron-Regular.otf') }}') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}

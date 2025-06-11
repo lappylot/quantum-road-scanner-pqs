@@ -1,0 +1,7 @@
+@font-face {
+  font-family: 'Orbitron';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/static/fonts/Orbitron-Regular.otf) format('truetype');
+}
