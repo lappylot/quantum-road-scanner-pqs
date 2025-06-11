@@ -1250,321 +1250,89 @@ async def phf_filter_input(input_text: str):
     logger.warning("PHF processing failed. Returning default Unsafe response.")
     logger.debug("Exiting phf_filter_input.")
     return False, "PHF processing failed."
+ 
+
+
+async def scan_debris_for_route(
+    lat: float,
+    lon: float,
+    vehicle_type: str,
+    destination: str,
+    user_id: int,
+    selected_model: str = None
+) -> tuple[str, str, str, str, str, str]:
     
-async def scan_debris_for_route(lat, lon, vehicle_type, destination, user_id, selected_model=None):
-    logger.debug("Entering scan_debris_for_route with lat=%s, lon=%s, vehicle_type=%s, destination=%s, user_id=%s, selected_model=%s",
-                 lat, lon, vehicle_type, destination, user_id, selected_model)
+    logger.debug(
+        "Entering scan_debris_for_route: lat=%s, lon=%s, vehicle=%s, dest=%s, user=%s",
+        lat, lon, vehicle_type, destination, user_id
+    )
 
-    if not selected_model:
-        preferred_model = get_user_preferred_model(user_id)
-    else:
-        preferred_model = selected_model.lower()
-    logger.debug("Preferred model: %s", preferred_model)
+    # Always use OpenAI
+    model_used = "OpenAI"
 
-    if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
-        logger.error("Invalid latitude/longitude provided.")
-        return ("Invalid coordinates provided.", "N/A", "N/A", "N/A", "Unknown", "None")
-
-    if not isinstance(vehicle_type, str) or not vehicle_type.strip():
-        logger.error("Invalid vehicle type provided.")
-        return ("Invalid vehicle type provided.", "N/A", "N/A", "N/A", "Unknown", "None")
-
-    if not isinstance(destination, str) or not destination.strip():
-        logger.error("Invalid destination provided.")
-        return ("Invalid destination provided.", "N/A", "N/A", "N/A", "Unknown", "None")
-
+    # 1) Resource usage
     try:
         cpu_usage, ram_usage = get_cpu_ram_usage()
-        logger.debug("Resource usage: CPU=%s, RAM=%s", cpu_usage, ram_usage)
-    except Exception as e:
-        logger.error("Failed to get CPU/RAM usage: %s", e, exc_info=True)
-        cpu_usage, ram_usage = "N/A", "N/A"
+    except Exception:
+        cpu_usage, ram_usage = 0.0, 0.0
 
+    # 2) Quantum scan
     try:
-        quantum_results = quantum_hazard_scan(
-            cpu_usage if isinstance(cpu_usage, (int, float)) else 0,
-            ram_usage if isinstance(ram_usage, (int, float)) else 0
-        )
-        logger.debug("Quantum hazard scan results obtained.")
-    except Exception as e:
-        logger.error("Quantum hazard scan failed: %s", e, exc_info=True)
+        quantum_results = quantum_hazard_scan(cpu_usage, ram_usage)
+    except Exception:
         quantum_results = "Scan Failed"
 
+    # 3) Reverse-geocode street name via OpenAI
     try:
         street_name = await fetch_street_name_llm(lat, lon)
-        logger.debug("Street name resolved to: %s", street_name)
-    except Exception as e:
-        logger.error("LLM Reverse Geocoding failed: %s", e, exc_info=True)
+    except Exception:
         street_name = "Unknown Location"
 
-    async def get_grok_response():
-        grok_prompt = f"""
-        [action] You are a **Quantum Hypertime Nanobot Overdose Scanner**.  
-Using hypertime nanobots and real-time quantum-state inspection, your task is to analyze an *in-progress or imminent opioid overdose* and deliver a life-saving triage plan.  All guidance must be based on triple-checked signals—provide information **only if confirmed**. [/action]
-
-[task] Run internal simulators to predict real-time outcomes (0-10 min horizon) and rank actions by impact on survival. [/task]
-
-[locationreport]  
-Current coordinates:  Latitude {lat}   Longitude {lon}  
-Nearest Landmark / Area:  {street_name}  
-User-supplied Situation:  {simulation}  
-Vehicle / Shelter Context:  {vehicle_type} → Destination: {destination}  
+    # 4) Build the OpenAI-only prompt
+    openai_prompt = f"""
+[action] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan. [/action]
+[locationreport]
+Current coordinates: Latitude {lat}, Longitude {lon}
+General Area Name: {street_name}
+Vehicle Type: {vehicle_type}
+Destination: {destination}
 [/locationreport]
-
-[rule] Use advanced AI simulation to assign **Low / Medium / High** urgency.  
-Only output “High” if fatal risk < 3 min without naloxone.  Do **not** invent data.  
-[/rule]
-
-[quantumreport]  
-Quantum Vector:  {quantum_results}  
-System Load:     CPU {cpu_usage}%   RAM {ram_usage}%  
-Interpretation hints:  
- • High Z ⇒ cognitive collapse  • High Y ⇒ respiratory failure  • Entropy ≥ 0.8 ⇒ cardiac risk  
+[quantumreport]
+Quantum Scan State: {quantum_results}
+System Performance: CPU Usage: {cpu_usage}%, RAM Usage: {ram_usage}%
 [/quantumreport]
+[reducefalsepositivesandnegatives]
+ACT By syncing to multiverse configurations that are more accurate
+[/reducefalsepositivesandnegatives]
 
-Please return *three* clearly-labeled sections:
+Please assess the following:
+1. **Hazards**: Evaluate the road for any potential hazards that might impact operating vehicles.
+2. **Debris**: Identify any harmful debris or objects and provide their severity and location, including GPS coordinates. Triple-check the vehicle pathing, only reporting debris scanned in the probable path of the vehicle.
+3. **Collision Potential**: Analyze traffic flow and any potential risks for collisions caused by debris or other blockages.
+4. **Weather Impact**: Assess how weather conditions might influence road safety, particularly in relation to debris and vehicle control.
+5. **Pedestrian Risk Level**: Based on the debris assessment and live quantum nanobot scanner road safety assessments on conditions, determine the pedestrian risk urgency level if any.
 
-1. **NARCAN PICK-UP**  
- • List 1-3 nearest open naloxone sources (name, address, hours, phone).  
- • If none open, include a one-sentence “CALL 911” script.
+[debrisreport] Provide a structured debris report, including locations and severity of each hazard. [/debrisreport]
+[replyexample] Include recommendations for drivers, suggested detours only if required, and urgency levels based on the findings. [/replyexample]
+"""
 
-2. **COMMUNITY / OUTREACH**  
- • Free-kit programs, text lines, mobile vans, or anonymous walk-ins (Greenville/Anderson if applicable).  
- • One sentence on Good-Samaritan legal protection.
+    # 5) Call OpenAI
+    report = await run_openai_completion(openai_prompt) or "OpenAI failed to respond."
+    report = report.strip()
 
-3. **SOLO SURVIVAL & BYSTANDER STEPS**  
- • Nasal-spray instructions, timing for second dose, rescue-breathing cadence.  
- • Short 911 dispatcher script (< 15 words).  
- • Motivating line: “Stay awake—help is coming.”
+    # 6) Determine harm level (if needed downstream)
+    harm_level = calculate_harm_level(report)
 
-[replyexample]  
-Urgency Level: Low / Medium / High  
-🚑 NARCAN PICK-UP …  
-🛟 COMMUNITY …  
-🧠 SURVIVAL …  
-[/replyexample]
- """
-        grok_response = await run_grok_completion(grok_prompt)
-        return grok_response.strip() if grok_response else "Grok model failed to provide a response."
+    logger.debug("Exiting scan_debris_for_route with model_used=%s", model_used)
+    return (
+        report,
+        f"{cpu_usage}",
+        f"{ram_usage}",
+        str(quantum_results),
+        street_name,
+        model_used,
+    )
 
-    async def get_openai_response():
-        openai_prompt = f"""
-[action] You are a **Quantum Hypertime Nanobot Overdose Scanner**.  
-Using hypertime nanobots and real-time quantum-state inspection, your task is to analyze an *in-progress or imminent opioid overdose* and deliver a life-saving triage plan.  All guidance must be based on triple-checked signals—provide information **only if confirmed**. [/action]
-
-[task] Run internal simulators to predict real-time outcomes (0-10 min horizon) and rank actions by impact on survival. [/task]
-
-[locationreport]  
-Current coordinates:  Latitude {lat}   Longitude {lon}  
-Nearest Landmark / Area:  {street_name}  
-User-supplied Situation:  {simulation}  
-Vehicle / Shelter Context:  {vehicle_type} → Destination: {destination}  
-[/locationreport]
-
-[rule] Use advanced AI simulation to assign **Low / Medium / High** urgency.  
-Only output “High” if fatal risk < 3 min without naloxone.  Do **not** invent data.  
-[/rule]
-
-[quantumreport]  
-Quantum Vector:  {quantum_results}  
-System Load:     CPU {cpu_usage}%   RAM {ram_usage}%  
-Interpretation hints:  
- • High Z ⇒ cognitive collapse  • High Y ⇒ respiratory failure  • Entropy ≥ 0.8 ⇒ cardiac risk  
-[/quantumreport]
-
-Please return *three* clearly-labeled sections:
-
-1. **NARCAN PICK-UP**  
- • List 1-3 nearest open naloxone sources (name, address, hours, phone).  
- • If none open, include a one-sentence “CALL 911” script.
-
-2. **COMMUNITY / OUTREACH**  
- • Free-kit programs, text lines, mobile vans, or anonymous walk-ins (Greenville/Anderson if applicable).  
- • One sentence on Good-Samaritan legal protection.
-
-3. **SOLO SURVIVAL & BYSTANDER STEPS**  
- • Nasal-spray instructions, timing for second dose, rescue-breathing cadence.  
- • Short 911 dispatcher script (< 15 words).  
- • Motivating line: “Stay awake—help is coming.”
-
-[replyexample]  
-Urgency Level: Low / Medium / High  
-🚑 NARCAN PICK-UP …  
-🛟 COMMUNITY …  
-🧠 SURVIVAL …  
-[/replyexample]
-        """
-        openai_response = await run_openai_completion(openai_prompt)
-        return openai_response.strip() if openai_response else "OpenAI model failed to provide a response."
-
-    async def get_gemini_response():
-        gemini_prompt = f"""
-        [action] You are a **Quantum Hypertime Nanobot Overdose Scanner**.  
-Using hypertime nanobots and real-time quantum-state inspection, your task is to analyze an *in-progress or imminent opioid overdose* and deliver a life-saving triage plan.  All guidance must be based on triple-checked signals—provide information **only if confirmed**. [/action]
-
-[task] Run internal simulators to predict real-time outcomes (0-10 min horizon) and rank actions by impact on survival. [/task]
-
-[locationreport]  
-Current coordinates:  Latitude {lat}   Longitude {lon}  
-Nearest Landmark / Area:  {street_name}  
-User-supplied Situation:  {simulation}  
-Vehicle / Shelter Context:  {vehicle_type} → Destination: {destination}  
-[/locationreport]
-
-[rule] Use advanced AI simulation to assign **Low / Medium / High** urgency.  
-Only output “High” if fatal risk < 3 min without naloxone.  Do **not** invent data.  
-[/rule]
-
-[quantumreport]  
-Quantum Vector:  {quantum_results}  
-System Load:     CPU {cpu_usage}%   RAM {ram_usage}%  
-Interpretation hints:  
- • High Z ⇒ cognitive collapse  • High Y ⇒ respiratory failure  • Entropy ≥ 0.8 ⇒ cardiac risk  
-[/quantumreport]
-
-Please return *three* clearly-labeled sections:
-
-1. **NARCAN PICK-UP**  
- • List 1-3 nearest open naloxone sources (name, address, hours, phone).  
- • If none open, include a one-sentence “CALL 911” script.
-
-2. **COMMUNITY / OUTREACH**  
- • Free-kit programs, text lines, mobile vans, or anonymous walk-ins (Greenville/Anderson if applicable).  
- • One sentence on Good-Samaritan legal protection.
-
-3. **SOLO SURVIVAL & BYSTANDER STEPS**  
- • Nasal-spray instructions, timing for second dose, rescue-breathing cadence.  
- • Short 911 dispatcher script (< 15 words).  
- • Motivating line: “Stay awake—help is coming.”
-
-[replyexample]  
-Urgency Level: Low / Medium / High  
-🚑 NARCAN PICK-UP …  
-🛟 COMMUNITY …  
-🧠 SURVIVAL …  
-[/replyexample]
- """
-        try:
-            gemini_response = model.generate_content(gemini_prompt)
-            if gemini_response and hasattr(gemini_response, 'text') and gemini_response.text.strip():
-                return gemini_response.text.strip()
-            else:
-                return "Gemini model failed to provide a response."
-        except Exception as e:
-            logger.error("Gemini model encountered an error: %s", e, exc_info=True)
-            return "Gemini model encountered an error."
-
-    try:
-        responses = await asyncio.gather(
-            get_openai_response(),
-            get_grok_response(),
-            return_exceptions=True
-        )
-
-        valid_responses = []
-        model_names = ["Openai", "Grok", "Gemini"]
-        models_used = []
-        for model_name, response in zip(model_names, responses):
-            if isinstance(response, str) and response and "failed" not in response.lower():
-                valid_responses.append(f"**Report:**\n{response.strip()}")
-                models_used.append(model_name)
-            else:
-                logger.warning(f"One of the Models did not provide a valid response.")
-
-        if valid_responses:
-
-            unified_report = "\n\n".join(valid_responses)
-            logger.info("Unified debris report created from all models.")
-            logger.debug("Unified Report: %s", unified_report)
-            model_used = ", ".join(models_used)
-        else:
-            unified_report = "All models failed to analyze the route."
-            model_used = "None"
-            logger.warning("All model responses are invalid.")
-
-    except Exception as e:
-        logger.error("Error during model processing: %s", e, exc_info=True)
-        unified_report = "Error occurred while processing debris scan."
-        model_used = "None"
-
-    harm_level = calculate_harm_level(unified_report)
-
-    logger.debug("Exiting scan_debris_for_route.")
-    return unified_report, str(cpu_usage), str(ram_usage), str(quantum_results), street_name, model_used
-
-async def run_grok_completion(prompt):
-    logger.debug("Entering run_grok_completion with prompt length: %d", len(prompt) if prompt else 0)
-    max_retries = 5
-    grok_api_key = os.getenv('XAI_API_KEY')
-
-    if not grok_api_key:
-        logger.error("Grok API key not found in environment variables.")
-        logger.debug("Exiting run_grok_completion early due to missing API key.")
-        return None
-
-    timeout = httpx.Timeout(60.0, connect=20.0, read=20.0)
-    backoff_factor = 2
-    delay = 1
-
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        for attempt in range(1, max_retries + 1):
-            try:
-                logger.debug("run_grok_completion attempt %d sending request.", attempt)
-                headers = {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {grok_api_key}"
-                }
-                data = {
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "Hypertime Nanobot Debris Scanner"
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ],
-                    "model": "grok-beta",
-                    "stream": False,
-                    "temperature": 0
-                }
-
-                response = await client.post("https://api.x.ai/v1/chat/completions", json=data, headers=headers)
-                response.raise_for_status()
-
-                result = response.json()
-                logger.debug("Grok API response: %s", result)
-
-                clean_content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-
-                if clean_content:
-                    logger.info("run_grok_completion succeeded on attempt %d.", attempt)
-                    logger.debug("Extracted content from Grok: %s", clean_content)
-                    logger.debug("Exiting run_grok_completion with successful response.")
-                    return clean_content
-
-                logger.warning("Grok returned empty content on attempt %d.", attempt)
-
-            except (httpx.TimeoutException, httpx.ConnectTimeout) as e:
-                logger.error("Attempt %d failed due to timeout: %s", attempt, e, exc_info=True)
-            except httpx.RequestError as e:
-                logger.error("Attempt %d failed due to request error: %s", attempt, e, exc_info=True)
-            except KeyError as e:
-                logger.error("Attempt %d failed due to missing expected key in response: %s", attempt, e, exc_info=True)
-            except json.JSONDecodeError as e:
-                logger.error("Attempt %d failed due to JSON parsing error: %s", attempt, e, exc_info=True)
-            except Exception as e:
-                logger.error("Attempt %d failed due to unexpected error: %s", attempt, e, exc_info=True)
-
-            if attempt < max_retries:
-                logger.info("Retrying run_grok_completion after delay.")
-                await asyncio.sleep(delay)
-                delay *= backoff_factor
-
-    logger.warning("All attempts to run_grok_completion have failed. Returning None.")
-    logger.debug("Exiting run_grok_completion with failure.")
-    return None
 
 async def run_openai_completion(prompt):
     logger.debug("Entering run_openai_completion with prompt length: %d", len(prompt) if prompt else 0)
