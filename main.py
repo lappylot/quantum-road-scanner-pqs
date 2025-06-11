@@ -1458,7 +1458,6 @@ Urgency Level: Low / Medium / High
         responses = await asyncio.gather(
             get_openai_response(),
             get_grok_response(),
-            get_gemini_response(),
             return_exceptions=True
         )
 
