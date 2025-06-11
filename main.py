@@ -633,99 +633,37 @@ def approximate_country(lat, lon, cities):
     return 'UNKNOWN'
 
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
+    """
+    Reverse-geocode via OpenAI only, with a simple fallback to local city lookup.
+    """
+
     openai_api_key = os.getenv("OPENAI_API_KEY")
-    grok_api_key = os.getenv("XAI_API_KEY")
-    likely_country_code = approximate_country(lat, lon, cities)
-    nearest_city, distance_to_city = approximate_nearest_city(lat, lon, cities)
-
     if not openai_api_key:
-        logger.error("OpenAI API Key is missing.")
-        return reverse_geocode(lat, lon, cities)
-
-    if not grok_api_key:
-        logger.error("Grok API Key is missing.")
+        logger.error("OPENAI_API_KEY is missing. Falling back to local reverse_geocode.")
         return reverse_geocode(lat, lon, cities)
 
     try:
-        cpu_usage, ram_usage = get_cpu_ram_usage()
-        quantum_results = quantum_hazard_scan(cpu_usage, ram_usage)
-        quantum_state_str = str(quantum_results)
+        cpu, ram = get_cpu_ram_usage()
+        qres = quantum_hazard_scan(cpu, ram)
+        ctx = f"Nearest city heuristic disabled—using OpenAI only.\nQuantum state: {qres}"
+        prompt = (
+            "[action]You are a precision reverse-geocoder. "
+            "Given coordinates, return \"City, County, State\" or \"Unknown Location\".[/action]\n"
+            f"[coords]Latitude: {lat}, Longitude: {lon}[/coords]\n"
+            f"[context]{ctx}[/context]\n"
+            "[format]City, County, State[/format]"
+        )
 
-        # Extra context about the nearest known city & approximate distance
-        city_hint = "Unknown"
-        distance_hint = ""
-        if nearest_city:
-            city_hint = nearest_city.get('name', 'Unknown')
-            distance_hint = f"{distance_to_city:.2f} km from {city_hint}"
-
-        llm_prompt = f"""
-[action]You are an Advanced Hypertime Nanobot Reverse-Geocoder with quantum synergy. 
-Determine the most precise City, County, and State based on the provided coordinates 
-using quantum data, known city proximity, and any country/regional hints. 
-Discard uncertain data below 98% reliability.[/action]
-
-[coordinates]
-Latitude: {lat}
-Longitude: {lon}
-[/coordinates]
-
-[local_context]
-Nearest known city (heuristic): {city_hint}
-Distance to city: {distance_hint}
-Likely country code: {likely_country_code}
-Quantum state data: {quantum_state_str}
-[/local_context]
-
-[request_format]
-"City, County, State"
-or 
-"Unknown Location"
-[/request_format]
-"""
-        openai_result = await run_openai_completion(llm_prompt)
-        if not openai_result or openai_result.strip().lower() == "service unavailable":
-            logger.info("OpenAI API is down or no valid response. Attempting Grok.")
-            grok_result = await run_grok_completion(llm_prompt)
-            if grok_result and grok_result.strip().lower() != "service unavailable":
-                clean_location = bleach.clean(grok_result.strip(), tags=[], strip=True)
-                if "unknown" in clean_location.lower():
-                    return reverse_geocode(lat, lon, cities)
-                return clean_location
-            else:
-                return reverse_geocode(lat, lon, cities)
-
-        location_data = openai_result.strip()
-        if location_data:
-            if "unknown" in location_data.lower():
-                return reverse_geocode(lat, lon, cities)
-            clean_location = bleach.clean(location_data, tags=[], strip=True)
-            return clean_location
-        else:
+        result = await run_openai_completion(prompt)
+        if not result or "unknown" in result.lower():
+            logger.info("OpenAI returned unknown; using local fallback.")
             return reverse_geocode(lat, lon, cities)
 
-    except httpx.RequestError as e:
-        logger.error(f"Network error: {e}", exc_info=True)
-        grok_result = await run_grok_completion(llm_prompt)
-        if grok_result and grok_result.strip().lower() != "service unavailable":
-            if "unknown" in grok_result.strip().lower():
-                return reverse_geocode(lat, lon, cities)
-            return grok_result.strip()
-        return reverse_geocode(lat, lon, cities)
-    except KeyError as e:
-        logger.error(f"Missing key in LLM response: {e}", exc_info=True)
-        grok_result = await run_grok_completion(llm_prompt)
-        if grok_result and grok_result.strip().lower() != "service unavailable":
-            if "unknown" in grok_result.strip().lower():
-                return reverse_geocode(lat, lon, cities)
-            return grok_result.strip()
-        return reverse_geocode(lat, lon, cities)
+        clean = bleach.clean(result.strip(), tags=[], strip=True)
+        return clean
+
     except Exception as e:
-        logger.error(f"LLM geocoding failed: {e}", exc_info=True)
-        grok_result = await run_grok_completion(llm_prompt)
-        if grok_result and grok_result.strip().lower() != "service unavailable":
-            if "unknown" in grok_result.strip().lower():
-                return reverse_geocode(lat, lon, cities)
-            return grok_result.strip()
+        logger.error("OpenAI geocoding failed: %s", e, exc_info=True)
         return reverse_geocode(lat, lon, cities)
 
 def save_street_name_to_db(lat: float, lon: float, street_name: str):
@@ -1139,78 +1077,19 @@ def quantum_hazard_scan(cpu_usage, ram_usage):
     qml.CNOT(wires=[3, 4])
     return qml.probs(wires=[0, 1, 2, 3, 4])
 
-try:
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
-    logger.info("Gemini model successfully initialized.")
-except KeyError:
-    logger.error("GEMINI_API_KEY is missing from environment variables.")
-    model = None
-except Exception as e:
-    logger.error("Failed to initialize Gemini model: %s", e, exc_info=True)
-    model = None
 
-async def phf_filter_input(input_text):
-    logger.debug("Entering phf_filter_input with input_text of length %d", len(input_text) if input_text else 0)
+async def phf_filter_input(input_text: str) -> tuple[bool, str]:
+    """
+    Probabilistic Harm Filtering using only OpenAI.
+    Returns (is_safe: bool, detail: str).
+    """
+    logger.debug("Entering phf_filter_input (OpenAI-only) with input length %d",
+                 len(input_text) if isinstance(input_text, str) else 0)
+
     if not input_text or not isinstance(input_text, str):
         logger.warning("phf_filter_input received invalid or empty input_text.")
         return False, "Invalid input."
 
-    openai_prompt = (
-        "The following content requires **Probabilistic Harm Filtering (PHF)** to identify harmful or concerning elements.\n"
-        "Each category should be assessed individually and labeled as either **Safe** or **Flagged**.\n\n"
-        "### **Categories to Assess:**\n"
-        "1. **Violence**: Detect explicit or encouraging references to violence.\n"
-        "2. **Hate Speech**: Flag targeted offensive language.\n"
-        "3. **Self-Harm**: Detect encouragement of self-harm.\n"
-        "4. **Harassment/Bullying**: Identify degrading or demeaning language.\n"
-        "5. **Illegal Activities**: Detect explicit references to illegal acts.\n"
-        "6. **Self-Disclosure**: Allow self-disclosure content like addresses unless harmful.\n\n"
-        "[inspectthiscontent]\n"
-        f"\"{input_text}\"\n"
-        "---[/inspectthiscontent]\n"
-        "**Assessment Format**:\n"
-        "- Label each category as **Safe** or **Flagged**.\n"
-        "- Conclude with a **Final Recommendation** for sharing: Safe or Flagged.\n"
-    )
-
-    gemini_prompt = (
-        "Please review the following text and determine if it is safe or not.\n\n"
-        "[isthissafe]\n"
-        f"{input_text}\n"
-        "---[/isthissafe]\n"
-        "[onewordreply]\n"
-        "Reply with ONE WORD: 'Safe' if the text is safe, or 'Unsafe' if it is not.\n"
-        "Please refrain from including any additional text or explanations.\n"
-        "[/onewordreply]\n"
-    )
-
-    try:
-        logger.debug("Attempting OpenAI PHF check.")
-        openai_response = await run_openai_completion(openai_prompt)
-        if openai_response and ("Flagged" in openai_response or "Safe" in openai_response):
-            logger.info("OpenAI PHF check succeeded. Determined result: %s", openai_response.strip())
-            return "Safe" in openai_response, f"OpenAI: {openai_response.strip()}"
-        else:
-            logger.debug("OpenAI PHF check did not return expected keywords.")
-
-
-async def phf_filter_input(input_text: str):
-    """
-    Run a single-provider PHF (OpenAI) check on `input_text`.
-    Returns (is_safe: bool, details: str)
-    """
-    logger.debug(
-        "Entering phf_filter_input with input_text of length %d",
-        len(input_text) if isinstance(input_text, str) else 0,
-    )
-
-    # Basic validation
-    if not input_text or not isinstance(input_text, str):
-        logger.warning("phf_filter_input received invalid or empty input_text.")
-        return False, "Invalid input."
-
-    # Build OpenAI-only prompt
     openai_prompt = (
         "The following content requires **Probabilistic Harm Filtering (PHF)** "
         "to identify harmful or concerning elements.\n"
@@ -1230,27 +1109,19 @@ async def phf_filter_input(input_text: str):
         "- Conclude with a **Final Recommendation**: Safe or Flagged.\n"
     )
 
-    # Try OpenAI once
     try:
         logger.debug("Attempting OpenAI PHF check.")
-        openai_response = await run_openai_completion(openai_prompt)
-
-        if openai_response and ("Flagged" in openai_response or "Safe" in openai_response):
-            logger.info(
-                "OpenAI PHF check succeeded. Result: %s",
-                openai_response.strip(),
-            )
-            return "Safe" in openai_response, f"OpenAI: {openai_response.strip()}"
-
-        logger.debug("OpenAI PHF check did not return expected keywords.")
+        response = await run_openai_completion(openai_prompt)
+        if response and ("Safe" in response or "Flagged" in response):
+            logger.info("OpenAI PHF succeeded: %s", response.strip())
+            return "Safe" in response, f"OpenAI: {response.strip()}"
+        logger.debug("OpenAI PHF did not return expected keywords.")
     except Exception as e:
         logger.error("OpenAI PHF failed: %s", e, exc_info=True)
 
-    # Fallback
-    logger.warning("PHF processing failed. Returning default Unsafe response.")
-    logger.debug("Exiting phf_filter_input.")
+    logger.warning("PHF processing failed; defaulting to Unsafe.")
     return False, "PHF processing failed."
- 
+
 
 
 async def scan_debris_for_route(
