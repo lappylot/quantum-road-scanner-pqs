@@ -1300,7 +1300,6 @@ class ReportForm(FlaskForm):
 def index():
     return redirect(url_for('home'))
 
-    
 @app.route('/home', methods=['GET', 'POST'])
 async def home():
     """
@@ -1308,37 +1307,34 @@ async def home():
       • OpenAI‐only processing
       • 13 searches / 15 min for logged‐in users, 5 searches / hour for anonymous
       • Multi‐step UI with real‐time feedback and loading overlay
-      • Includes creator bio and “How It Works” explanation in a Carl Sagan style
+      • Creator bio and “How It Works” in a Carl Sagan style
+      • Full navigation: Register / Login / Dashboard
     """
-    # Identify user & rate-limit flags
+    # Identify user & rate-limit
     if 'username' in session:
-        user_id  = get_user_id(session['username'])
-        is_admin = session.get('is_admin', False)
+        user_id, is_admin = get_user_id(session['username']), session.get('is_admin', False)
     else:
-        user_id  = None
-        is_admin = False
+        user_id, is_admin = None, False
 
     error = None
     results_html = None
 
-    # Handle form submission
     if request.method == 'POST':
-        address  = sanitize_input(request.form['address'])
-        scenario = sanitize_input(request.form['scenario'])
-        model    = 'openai'
-
+        address, scenario = sanitize_input(request.form['address']), sanitize_input(request.form['scenario'])
+        model = 'openai'
         # Validation
         if not address or not scenario:
             error = "Please complete every field."
         else:
-            # Logged-in rate limit
+            # Logged-in limiter
             if user_id:
                 if not is_admin and not check_rate_limit(user_id):
                     error = "Rate limit exceeded—try again shortly."
             else:
-                # Anonymous in-session limiter (5/hr)
+                # Anonymous 5/hr
                 anon = session.get('anon_rate', {'count': 0, 'start': None})
-                now  = datetime.now()
+                from datetime import datetime, timedelta
+                now = datetime.now()
                 start = datetime.fromisoformat(anon['start']) if anon['start'] else now
                 if not anon['start'] or now - start > timedelta(hours=1):
                     anon = {'count': 1, 'start': now.isoformat()}
@@ -1348,7 +1344,6 @@ async def home():
                 if anon['count'] > 5:
                     error = "Anonymous limit reached—please wait an hour."
 
-        # Execute search if no error
         if not error:
             resp = await start_narcan_finder_route()
             data = resp.get_json()
@@ -1358,15 +1353,12 @@ async def home():
                 md = data['result']
                 results_html = Markup(markdown2.markdown(md, extras=["fenced-code-blocks"]))
 
-    # Render the multi-step dashboard UI with bio & explanation
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Quantum NARCAN Finder Dashboard</title>
-
-  <!-- CSS with SRI -->
+  <title>Quantum NARCAN Finder</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
         integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
   <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
@@ -1377,8 +1369,10 @@ async def home():
         integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
   <style>
     body { background: linear-gradient(135deg,#1e3c72 0%,#2a5298 100%); color:#fff; font-family:'Roboto'; }
-    .navbar { background:#000; }
-    .navbar-brand { font-family:'Orbitron'; color:#0ff; }
+    .navbar { background:#000; padding:0.5rem 1rem; }
+    .navbar-brand { font-family:'Orbitron'; color:#0ff; font-size:1.5rem; }
+    .nav-link { color:#fff; margin-left:1rem; }
+    .nav-link:hover { color:#0cc; }
     .container { max-width:800px; margin:2rem auto; }
     .card { background:rgba(255,255,255,0.1); border:none; border-radius:0.75rem; }
     .btn-primary { background:#0ff; color:#000; border:none; transition:background 0.3s; }
@@ -1388,10 +1382,8 @@ async def home():
     .step:not(:last-child)::after {
       content:''; position:absolute; top:15px; right:0; width:100%; height:2px; background:#555;
     }
-    .circle {
-      width:30px; height:30px; margin:0 auto 8px; line-height:30px;
-      border-radius:50%; background:#555; color:#fff;
-    }
+    .circle { width:30px; height:30px; margin:0 auto 8px; line-height:30px;
+              border-radius:50%; background:#555; color:#fff; }
     .active .circle, .completed .circle { background:#0ff; color:#000; }
     #overlay {
       display:none; position:fixed; top:0; left:0; width:100%; height:100%;
@@ -1405,13 +1397,22 @@ async def home():
 </head>
 <body>
 
-<nav class="navbar">
-  <span class="navbar-brand mx-auto">Quantum NARCAN Finder</span>
+<nav class="navbar d-flex align-items-center">
+  <a class="navbar-brand" href="{{ url_for('home') }}">Quantum NARCAN Finder</a>
+  <div class="ml-auto">
+    {% if session.get('username') %}
+      <a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+    {% else %}
+      <a class="nav-link" href="{{ url_for('login') }}">Login</a>
+      <a class="nav-link" href="{{ url_for('register') }}">Register</a>
+    {% endif %}
+  </div>
 </nav>
 
 <div class="container">
 
-  <!-- About the Creator -->
+  <!-- Creator Bio -->
   <div class="card bio p-4">
     <h5>About the Creator</h5>
     <p>
@@ -1431,24 +1432,15 @@ async def home():
       sails beyond the horizon of classical limits:
     </p>
     <ul>
-      <li>
-        <strong>Quantum Hypertime Simulation:</strong> We harness qubits—delicate instruments
-        of computation—to explore myriad scenarios in parallel, much like waves dancing
-        across the cosmic ocean.
-      </li>
-      <li>
-        <strong>OpenAI Contextual Insight:</strong> A sublime mind techniques natural language
-        to interpret your location and need, ensuring that the guidance resonates with your
-        real-world crisis.
-      </li>
-      <li>
-        <strong>Ephemeral Encryption:</strong> Every query is shielded in AES-GCM armor,
-        encrypted in flight, and erased upon completion—leaving no trace but compassion.
-      </li>
-      <li>
-        <strong>Harm Reduction Ethos:</strong> No matter where you are, we reveal the nearest
-        lifelines—clinics, vending machines, or delivery networks—illuminating paths to hope.
-      </li>
+      <li><strong>Quantum Hypertime Simulation:</strong> We harness qubits—delicate instruments
+          of computation—to explore myriad scenarios in parallel, like waves dancing across
+          the cosmic ocean.</li>
+      <li><strong>OpenAI Contextual Insight:</strong> A sublime mind parses your location and
+          need, ensuring guidance that resonates with your real-world crisis.</li>
+      <li><strong>Ephemeral Encryption:</strong> Every query is shielded in AES-GCM armor,
+          encrypted in flight, and erased upon completion—leaving no trace but compassion.</li>
+      <li><strong>Harm Reduction Ethos:</strong> No matter where you are, we reveal the nearest
+          lifelines—clinics, vending machines, or delivery networks—illuminating paths to hope.</li>
     </ul>
   </div>
 
@@ -1505,11 +1497,12 @@ async def home():
 </div>
 
 <!-- Loading Overlay -->
-<div id="overlay" class="d-flex">
+<div id="overlay" style="display:none; position:fixed; top:0; left:0;
+                         width:100%; height:100%; background:rgba(0,0,0,0.7);
+                         z-index:999; align-items:center; justify-content:center;">
   <div class="spinner-border" role="status"></div>
 </div>
 
-<!-- JS -->
 <script>
   document.getElementById('finderForm').addEventListener('submit', () => {
     document.getElementById('overlay').style.display = 'flex';
@@ -1520,6 +1513,7 @@ async def home():
 </body>
 </html>
 """, error=error, results_html=results_html)
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     error_message = ""
