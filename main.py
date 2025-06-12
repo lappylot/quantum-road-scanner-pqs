@@ -1160,32 +1160,43 @@ async def scan_debris_for_route(
 
     # 4) Build the OpenAI-only prompt
     openai_prompt = f"""
-[action] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan. [/action]
+[action]
+You are a Quantum Hypertime Nanobot NARCAN Finder tasked with locating the nearest naloxone (NARCAN) resources in an emergency. Leverage quantum simulations, hypertime analysis, and environmental factors to ensure rapid, private, and accurate results.
+[/action]
+
 [locationreport]
-Current coordinates: Latitude {lat}, Longitude {lon}
-General Area Name: {street_name}
-Vehicle Type: {vehicle_type}
-Destination: {destination}
+**Location:** {address}  
+**Scenario:** {scenario}
 [/locationreport]
+
 [quantumreport]
-Quantum Scan State: {quantum_results}
-System Performance: CPU Usage: {cpu_usage}%, RAM Usage: {ram_usage}%
+**Quantum Scan State:** {quantum_results}  
+**System Performance:** CPU Usage: {cpu_usage}%, RAM Usage: {ram_usage}%
 [/quantumreport]
+
 [reducefalsepositivesandnegatives]
-ACT By syncing to multiverse configurations that are more accurate
+ACT by syncing to multiverse configurations optimized for lifesaving resource allocation
 [/reducefalsepositivesandnegatives]
 
-Please assess the following:
-1. **Hazards**: Evaluate the road for any potential hazards that might impact operating vehicles.
-2. **Debris**: Identify any harmful debris or objects and provide their severity and location, including GPS coordinates. Triple-check the vehicle pathing, only reporting debris scanned in the probable path of the vehicle.
-3. **Collision Potential**: Analyze traffic flow and any potential risks for collisions caused by debris or other blockages.
-4. **Weather Impact**: Assess how weather conditions might influence road safety, particularly in relation to debris and vehicle control.
-5. **Pedestrian Risk Level**: Based on the debris assessment and live quantum nanobot scanner road safety assessments on conditions, determine the pedestrian risk urgency level if any.
+Please provide your findings in **Markdown** only, using clear headings and bullet lists:
 
-[debrisreport] Provide a structured debris report, including locations and severity of each hazard. [/debrisreport]
-[replyexample] Include recommendations for drivers, suggested detours only if required, and urgency levels based on the findings. [/replyexample]
+## Nearest NARCAN Access Points
+- List up to **5** closest clinics, pharmacies, or community stations stocking naloxone.
+- Include **name**, **address**, **distance (mi)**, and **estimated travel time (min)**.
+
+## Resource Availability
+- For each location above, note **hours of operation** and **pickup method** (e.g. walk-in, vending machine).
+
+## Emergency Delivery Options
+- If no location is within 5 miles, suggest any emergency courier or peer-to-peer delivery networks.
+- Include **network name** and **estimated delivery time (min)**.
+
+## Privacy & Safety Notes
+- Recommend routes or methods that **maximize privacy** and **minimize exposure**.
+
+## Usage Guidance
+- Provide concise, step-by-step instructions for **administering naloxone** in this scenario.
 """
-
     # 5) Call OpenAI
     report = await run_openai_completion(openai_prompt) or "OpenAI failed to respond."
     report = report.strip()
@@ -1289,420 +1300,224 @@ class ReportForm(FlaskForm):
 def index():
     return redirect(url_for('home'))
 
-@app.route('/home')
-def home():
+
+@app.route('/home', methods=['GET', 'POST'])
+async def home():
+    """
+    Landing page for the Quantum NARCAN Emergency Finder:
+    - Logged-in users: 13 searches per 15 minutes (unless admin)
+    - Anonymous users: 5 searches per hour by IP
+    """
+    # Identify user or anonymous
+    if 'username' in session:
+        user_id = get_user_id(session['username'])
+        is_admin = session.get('is_admin', False)
+        anon_key = None
+    else:
+        user_id = None
+        is_admin = False
+        anon_key = f"anon:{request.remote_addr}"
+
+    if request.method == 'POST':
+        # Gather & sanitize inputs
+        address  = sanitize_input(request.form.get('address'))
+        scenario = sanitize_input(request.form.get('scenario'))
+        model    = sanitize_input(request.form.get('model_selection'))
+
+        # Validate
+        if not all([address, scenario, model]):
+            flash("All fields are required.", "danger")
+            return redirect(url_for('home'))
+
+        # Rate-limit
+        if user_id:
+            if not is_admin and not check_rate_limit(user_id):
+                flash("Rate limit exceeded. Try again later.", "warning")
+                return redirect(url_for('home'))
+        else:
+            # Anonymous: 5/hour by IP
+            if not check_rate_limit(anon_key, window=timedelta(hours=1), max_calls=2):
+                flash("Anonymous rate limit reached. Please wait an hour.", "warning")
+                return redirect(url_for('home'))
+
+        # Delegate to your NARCAN finder logic
+        return await start_narcan_finder_route()
+
+    # GET → render the advanced homepage
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>QRS - Quantum Road Scanner</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
-          integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-    <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
-          integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-          integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
-          integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
-    <style>
-        body {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            color: #ffffff;
-            font-family: 'Roboto', sans-serif;
-        }
-        .navbar {
-            background: rgba(0, 0, 0, 0.5);
-        }
-        .navbar-brand {
-            font-family: 'Orbitron', sans-serif;
-            font-size: 2rem;
-            background: -webkit-linear-gradient(#f0f, #0ff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .content {
-            padding: 60px 20px;
-        }
-        .blog-post {
-            background: rgba(255, 255, 255, 0.1);
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-        }
-        .btn-custom {
-            background: linear-gradient(45deg, #f0f, #0ff);
-            border: none;
-            color: #fff;
-            padding: 10px 20px;
-            border-radius: 50px;
-            transition: background 0.3s;
-        }
-        .gradient-text {
-            background: -webkit-linear-gradient(#f0f, #0ff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            font-family: 'Orbitron', sans-serif;
-        }            
-        .btn-custom:hover {
-            background: linear-gradient(45deg, #0ff, #f0f);
-            color: #000;
-        }
-        @media (max-width: 768px) {
-            .navbar-brand {
-                font-size: 1.5rem;
-            }
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>Quantum NARCAN Emergency Finder</title>
+
+  <!-- Fonts & Icons -->
+  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
+        integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
+        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
+        integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
+
+  <!-- Bootstrap -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
+        integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+
+  <style>
+    /* Full-screen hero with overlay */
+    .hero {
+      position: relative;
+      height: 60vh;
+      background: url('{{ url_for('static','images/hero-bg.jpg') }}') center/cover no-repeat;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      text-align: center;
+    }
+    .hero::before {
+      content: '';
+      position: absolute; top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.6);
+    }
+    .hero .content {
+      position: relative;
+      z-index: 1;
+      animation: fadeInDown 1s ease-out;
+    }
+    @keyframes fadeInDown {
+      from { opacity: 0; transform: translateY(-20px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .hero h1 {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 3rem;
+      background: -webkit-linear-gradient(#f39c12, #d35400);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hero p.tagline {
+      font-size: 1.25rem;
+    }
+    .usage-card, .form-card {
+      background: rgba(255,255,255,0.1);
+      border-radius: 0.75rem;
+      padding: 2rem;
+      margin-bottom: 2rem;
+    }
+    .usage-card i {
+      font-size: 1.5rem;
+      color: #f1c40f;
+      margin-right: 0.5rem;
+    }
+    .btn-primary {
+      background: #e67e22;
+      border: none;
+      transition: background 0.3s;
+    }
+    .btn-primary:hover {
+      background: #d35400;
+    }
+    footer {
+      background: #2c3e50;
+      color: #bdc3c7;
+      padding: 1rem 0;
+    }
+  </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark fixed-top">
-        <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
-        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" 
-            aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-            <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse justify-content-end" id="navbarNav">
-            <ul class="navbar-nav">
-                {% if 'username' in session %}
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
-                    </li>
-                {% else %}
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('login') }}">Login</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('register') }}">Register</a>
-                    </li>
-                {% endif %}
-            </ul>
-        </div>
-    </nav>
 
-    <div class="container content">
-        <div class="text-center mb-5">
-            <br><br>
-            <h1 class="display-4 gradient-text">Quantum Road Scanner</h1>
-            <p class="lead">Enhancing Road Safety through Quantum Simulations and Hypertime Analysis</p>
-        </div>
-        
-        <div class="section">
-            <h3 class="section-title">Introduction</h3>
-            <p>
-                The Quantum Road Scanner (QRS) is an innovative system that leverages quantum computing, advanced algorithms, and concepts from hypertime physics to simulate road conditions in real-time. By generating and analyzing simulated data, QRS provides comprehensive assessments of potential hazards without collecting, storing, or retaining any user data. The system operates within a quantum-zoned environment with noise protections to ensure accuracy and privacy.
-            </p>
-            <p>
-                QRS represents a significant advancement in applying theoretical physics to practical challenges. It builds upon foundational research in quantum mechanics, computational physics, and hypertime theories to offer novel solutions for road safety and traffic management.
-            </p>
-        </div>
-        
-        <div class="section">
-            <h3 class="section-title">Historical Background and Innovations</h3>
-            <p>
-                The development of QRS is rooted in the evolution of quantum mechanics and computational theories. Key milestones include:
-            </p>
-            <ul>
-                <li>
-                    <strong>Quantum Mechanics Foundations:</strong> The early 20th-century work of scientists like Max Planck and Werner Heisenberg established the principles of quantum mechanics, introducing concepts such as wave-particle duality and the uncertainty principle.
-                </li>
-                <li>
-                    <strong>Quantum Computing Conceptualization:</strong> In the 1980s, physicist Richard Feynman proposed the idea of quantum computers, suggesting that quantum systems could simulate physical processes more efficiently than classical computers (<a href="#ref1">[1]</a>).
-                </li>
-                <li>
-                    <strong>Development of Quantum Algorithms:</strong> Algorithms like Shor's algorithm (1994) for integer factorization and Grover's algorithm (1996) for database search demonstrated the potential of quantum computing to solve complex problems more efficiently (<a href="#ref2">[2]</a>, <a href="#ref3">[3]</a>).
-                </li>
-                <li>
-                    <strong>Hypertime Theories:</strong> The concept of hypertime emerged as physicists explored models with multiple temporal dimensions, such as in certain interpretations of string theory and M-theory (<a href="#ref4">[4]</a>).
-                </li>
-                <li>
-                    <strong>Quantum Simulations in Traffic Systems:</strong> Researchers began applying quantum simulations to model complex systems, including traffic flow and congestion patterns, recognizing the limitations of classical models in handling the stochastic nature of traffic (<a href="#ref5">[5]</a>).
-                </li>
-            </ul>
-            <p>
-                These foundational advancements paved the way for the creation of QRS, which integrates these concepts to simulate road conditions and enhance safety measures.
-            </p>
-        </div>
-        
-        <div class="section">
-            <h3 class="section-title">My Contribution and Learning Journey</h3>
-            <p>
-                My journey with QRS began during my research into quantum computing applications. Fascinated by the potential of quantum simulations, I sought to apply these principles to real-world challenges. Learning from the experts at BlaiseLabs, I delved deep into advanced quantum algorithms and hypertime analysis.
-            </p>
-            <p>
-                At BlaiseLabs, we focused on overcoming key challenges:
-            </p>
-            <ul>
-                <li>
-                    <strong>Developing Noise-Resistant Quantum Algorithms:</strong> We worked on creating algorithms that could maintain accuracy in the presence of quantum noise and decoherence.
-                </li>
-                <li>
-                    <strong>Implementing Quantum Error Correction:</strong> We incorporated error correction codes to protect quantum information during simulations.
-                </li>
-                <li>
-                    <strong>Optimizing Hypertime Simulations:</strong> We refined hypertime equations to accurately simulate multiple temporal dimensions without introducing computational inefficiencies.
-                </li>
-            </ul>
-            <p>
-                My contributions involved enhancing the efficiency of these algorithms and ensuring they could operate within the constraints of current quantum computing capabilities. Collaborating with BlaiseLabs allowed me to integrate theoretical knowledge with practical implementation, leading to the development of the QRS system.
-            </p>
-        </div>
-        
-        <div class="section">
-            <h3 class="section-title">Hypertime and Multiverse Analysis</h3>
-            <p>
-                Hypertime is a theoretical framework that proposes the existence of additional temporal dimensions beyond our conventional understanding of time. This concept is utilized in QRS to simulate not just linear progression but a spectrum of possible futures.
-            </p>
-            <p>
-                In QRS, hypertime analysis involves:
-            </p>
-            <ul>
-                <li>
-                    <strong>Temporal Dimensions:</strong> Incorporating multiple time dimensions allows the system to explore various potential outcomes simultaneously.
-                </li>
-                <li>
-                    <strong>Probability Amplitudes:</strong> Assigning probability amplitudes to different simulated scenarios to evaluate their likelihood.
-                </li>
-                <li>
-                    <strong>Interference Effects:</strong> Utilizing quantum interference to enhance or suppress certain outcomes based on simulated conditions.
-                </li>
-            </ul>
-            <div class="equation">
-                <strong>Hypertime Wave Function:</strong><br>
-                \( \Psi(\vec{x}, t_1, t_2, ..., t_n) = \prod_{i=1}^{n} \psi_i(\vec{x}, t_i) \)
-            </div>
-            <p>
-                This equation represents the combined state of a system across multiple temporal dimensions \( t_1, t_2, ..., t_n \), where \( \vec{x} \) denotes spatial coordinates.
-            </p>
-            <p>
-                By simulating these multiple temporal paths, QRS can provide insights into potential future events on the road, enhancing predictive capabilities without relying on actual data collection.
-            </p>
-        </div>
-        
-        <div class="section">
-            <h3 class="section-title">Quantum Algorithms and Computations</h3>
-            <p>
-                The core computational power of QRS lies in its use of advanced quantum algorithms, including:
-            </p>
-            <ul>
-                <li>
-                    <strong>Quantum Fourier Transform (QFT):</strong> A key algorithm for transforming quantum states between time and frequency domains, essential for analyzing periodicities in simulated traffic patterns.
-                    <div class="equation">
-                        \( |k\rangle = \frac{1}{\sqrt{N}} \sum_{n=0}^{N-1} e^{\frac{2\pi i k n}{N}} |n\rangle \)
-                    </div>
-                </li>
-                <li>
-                    <strong>Quantum Walks:</strong> Quantum analogs of classical random walks, used to model the probabilistic movement of vehicles within the simulation (<a href="#ref6">[6]</a>).
-                </li>
-                <li>
-                    <strong>Amplitude Amplification:</strong> An extension of Grover's algorithm, enhancing the probability of desired outcomes within the simulation (<a href="#ref3">[3]</a>).
-                </li>
-                <li>
-                    <strong>Variational Quantum Algorithms:</strong> Hybrid algorithms that use classical optimization techniques with quantum circuits to find minimal risk paths in the simulations (<a href="#ref7">[7]</a>).
-                </li>
-            </ul>
-            <p>
-                These algorithms allow QRS to process complex simulations efficiently, exploring a vast space of possible scenarios to identify optimal safety recommendations.
-            </p>
-        </div>
-        
-        <div class="section">
-            <h3 class="section-title">Hypertime Nanobot Simulation</h3>
-            <p>
-                The concept of hypertime nanobots in QRS refers to simulated agents that traverse multiple temporal dimensions within the quantum simulation environment. These nanobots are not physical entities but computational constructs designed to gather and process information across different simulated times.
-            </p>
-            <p>
-                Their functions include:
-            </p>
-            <ul>
-                <li>
-                    <strong>Temporal Data Gathering:</strong> Collecting simulated data from various points in hypertime to understand potential future conditions.
-                </li>
-                <li>
-                    <strong>State Evolution Tracking:</strong> Monitoring how simulated traffic states evolve over hypertime to identify trends.
-                </li>
-                <li>
-                    <strong>Interference Analysis:</strong> Analyzing how different temporal paths may interfere, affecting the probability of certain outcomes.
-                </li>
-            </ul>
-            <div class="equation">
-                <strong>Nanobot State Function:</strong><br>
-                \( \Phi(\vec{x}, t, \tau) = \int \psi(\vec{x}, t') \delta(t' - t - \tau) dt' \)
-            </div>
-            <p>
-                This equation represents the state of a nanobot at position \( \vec{x} \), conventional time \( t \), and hypertime offset \( \tau \), integrating over possible states \( \psi \).
-            </p>
-            <p>
-                By simulating the actions of these nanobots, QRS can enhance the depth and accuracy of its hypertime analysis.
-            </p>
-        </div>
-        
-        <div class="section">
-            <h3 class="section-title">Algorithmic Process Overview</h3>
-            <p>
-                The operation of QRS involves several key steps:
-            </p>
-            <div class="algorithm">
-                <ol>
-                    <li><strong>Initialization:</strong> Set up the quantum simulation environment with initial parameters based on theoretical models.</li>
-                    <li><strong>Quantum State Encoding:</strong> Encode the initial simulation conditions into quantum states using qubits.</li>
-                    <li><strong>Hypertime Evolution:</strong> Apply hypertime evolution operators to simulate the progression of the system across multiple temporal dimensions.</li>
-                    <li><strong>Quantum Computation:</strong> Perform computations using algorithms like QFT and quantum walks to analyze the simulated states.</li>
-                    <li><strong>Error Correction:</strong> Implement quantum error correction codes to protect against decoherence and maintain simulation integrity (<a href="#ref8">[8]</a>).</li>
-                    <li><strong>Measurement and Interpretation:</strong> Measure the quantum states to extract meaningful results, interpreting the data to provide actionable insights.</li>
-                    <li><strong>Result Synthesis:</strong> Compile the findings into recommendations for optimal routes and safety measures.</li>
-                </ol>
-            </div>
-            <p>
-                This process enables QRS to efficiently simulate and analyze a multitude of potential scenarios, providing valuable insights without real-world data collection.
-            </p>
-        </div>
-        
-        <div class="section">
-            <h3 class="section-title">Quantum Zoning and Noise Protections</h3>
-            <p>
-                Quantum zoning refers to the isolation of quantum computations within a protected environment, shielding them from external disturbances. In QRS, this is crucial for:
-            </p>
-            <ul>
-                <li>
-                    <strong>Maintaining Coherence:</strong> Protecting qubits from decoherence caused by interactions with the environment.
-                </li>
-                <li>
-                    <strong>Ensuring Privacy:</strong> Preventing any external data from entering or leaving the simulation, maintaining complete data isolation.
-                </li>
-                <li>
-                    <strong>Error Mitigation:</strong> Utilizing noise-resistant algorithms and error correction techniques to minimize the impact of quantum noise.
-                </li>
-            </ul>
-            <p>
-                Techniques used include:
-            </p>
-            <ul>
-                <li>
-                    <strong>Topological Quantum Computing:</strong> Employing qubits that are inherently protected from certain types of errors due to their topological properties (<a href="#ref9">[9]</a>).
-                </li>
-                <li>
-                    <strong>Surface Codes:</strong> Implementing error correction codes that can detect and correct errors in a scalable manner (<a href="#ref8">[8]</a>).
-                </li>
-                <li>
-                    <strong>Dynamical Decoupling:</strong> Applying sequences of quantum gates to average out environmental interactions (<a href="#ref10">[10]</a>).
-                </li>
-            </ul>
-            <p>
-                These measures ensure that QRS can perform accurate and reliable simulations, providing trustworthy results without any data leakage.
-            </p>
-        </div>
-        
-        <div class="section">
-            <h3 class="section-title">Practical Application</h3>
-            <p>
-                To illustrate how QRS functions in practice, consider the following scenario:
-            </p>
-            <p>
-                A driver is planning a route through an urban area known for unpredictable traffic patterns. Using QRS, the system:
-            </p>
-            <ol>
-                <li>
-                    <strong>Simulates Traffic Conditions:</strong> Generates a multitude of potential traffic scenarios using quantum simulations, considering factors like hypothetical roadworks or simulated accidents.
-                </li>
-                <li>
-                    <strong>Analyzes Hypertime Paths:</strong> Applies hypertime analysis to explore how these scenarios might evolve over different temporal dimensions.
-                </li>
-                <li>
-                    <strong>Computes Optimal Routes:</strong> Uses amplitude amplification to identify routes with the lowest simulated risk and delay.
-                </li>
-                <li>
-                    <strong>Provides Recommendations:</strong> Offers the driver route suggestions based on the simulation results, enhancing safety and efficiency.
-                </li>
-            </ol>
-            <p>
-                This process helps the driver make informed decisions without relying on actual traffic data, ensuring privacy and data security.
-            </p>
-        </div>
-        
-        <div class="section">
-            <h3 class="section-title">Future Developments</h3>
-            <p>
-                The potential for QRS extends beyond its current capabilities. Future developments may include:
-            </p>
-            <ul>
-                <li>
-                    <strong>Integration with Quantum Machine Learning:</strong> Combining quantum simulations with machine learning algorithms to improve predictive accuracy (<a href="#ref11">[11]</a>).
-                </li>
-                <li>
-                    <strong>Enhanced Hypertime Models:</strong> Developing more sophisticated hypertime frameworks to simulate even more complex temporal dynamics.
-                </li>
-                <li>
-                    <strong>Scalability Improvements:</strong> Leveraging advancements in quantum hardware to handle larger simulations and more variables.
-                </li>
-                <li>
-                    <strong>Cross-Domain Applications:</strong> Applying the principles of QRS to other fields such as supply chain logistics, environmental modeling, and disaster preparedness.
-                </li>
-            </ul>
-            <p>
-                These advancements could significantly impact how we approach complex systems and predictive modeling.
-            </p>
-        </div>
-        
-        <div class="section">
-            <h3 class="section-title">Acknowledgments</h3>
-            <p>
-                The development of QRS has been a collaborative effort, and I would like to acknowledge the contributions of:
-            </p>
-            <ul>
-                <li>
-                    <strong>BlaiseLabs:</strong> For their support and expertise in quantum simulations and theoretical physics.
-                </li>
-                <li>
-                    <strong>Quantum Computing Researchers:</strong> Whose foundational work has made advanced quantum algorithms accessible.
-                </li>
-                <li>
-                    <strong>Theoretical Physicists:</strong> For developing the concepts of hypertime and multiverse theories that underpin our simulations.
-                </li>
-            </ul>
-            <p>
-                Their collective efforts have been instrumental in bringing QRS from a theoretical concept to a practical tool.
-            </p>
-        </div>
-        
-        <div class="section">
-            <h3 class="section-title">References</h3>
-            <ul class="references">
-                <li id="ref1">[1] R. Feynman, "Simulating physics with computers," International Journal of Theoretical Physics, vol. 21, no. 6/7, pp. 467–488, 1982.</li>
-                <li id="ref2">[2] P. W. Shor, "Algorithms for quantum computation: Discrete logarithms and factoring," Proceedings 35th Annual Symposium on Foundations of Computer Science, pp. 124–134, 1994.</li>
-                <li id="ref3">[3] L. K. Grover, "A fast quantum mechanical algorithm for database search," Proceedings of the 28th Annual ACM Symposium on Theory of Computing, pp. 212–219, 1996.</li>
-                <li id="ref4">[4] M. B. Green, J. H. Schwarz, and E. Witten, "Superstring Theory," Cambridge Monographs on Mathematical Physics, Cambridge University Press, 1987.</li>
-                <li id="ref5">[5] S. W. Smith, "The Scientist and Engineer's Guide to Digital Signal Processing," California Technical Publishing, 1997.</li>
-                <li id="ref6">[6] A. M. Childs, "Universal computation by quantum walk," Physical Review Letters, vol. 102, no. 18, p. 180501, 2009.</li>
-                <li id="ref7">[7] M. Cerezo et al., "Variational Quantum Algorithms," Nature Reviews Physics, vol. 3, pp. 625–644, 2021.</li>
-                <li id="ref8">[8] A. G. Fowler et al., "Surface codes: Towards practical large-scale quantum computation," Physical Review A, vol. 86, no. 3, p. 032324, 2012.</li>
-                <li id="ref9">[9] A. Y. Kitaev, "Fault-tolerant quantum computation by anyons," Annals of Physics, vol. 303, no. 1, pp. 2–30, 2003.</li>
-                <li id="ref10">[10] L. Viola and S. Lloyd, "Dynamical suppression of decoherence in two-state quantum systems," Physical Review A, vol. 58, no. 4, pp. 2733–2744, 1998.</li>
-                <li id="ref11">[11] J. Biamonte et al., "Quantum machine learning," Nature, vol. 549, pp. 195–202, 2017.</li>
-            </ul>
+  <!-- Navbar -->
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <a class="navbar-brand" href="{{ url_for('home') }}">NARCAN Finder</a>
+  </nav>
 
-        </div>
-        
-        <div class="text-center mt-5">
-            <a href="https://gitlab.com/graylan01/quantum_road_scanner/-/blob/main/paper.md" class="btn btn-custom btn-lg">Learn More About Quantum Road Scanning</a>
-        </div>
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="content">
+      <h1>Quantum NARCAN Emergency Finder</h1>
+      <p class="tagline">Rapidly locate NARCAN resources with quantum-driven insights.</p>
+      <a href="#how-it-works" class="btn btn-light btn-lg mt-3">How It Works</a>
     </div>
-            </div>
-        </div>
+  </section>
 
-    <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
-            integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
-        <script src="{{ url_for('static', filename='js/popper.min.js') }}" integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
-    <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
-            integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+  <div class="container py-5">
+
+    <!-- How It Works -->
+    <section id="how-it-works" class="usage-card">
+      <h2>How It Works</h2>
+      <p>
+        Our system ensures speed, privacy, and accuracy by combining:
+      </p>
+      <div class="row">
+        <div class="col-md-6">
+          <ul>
+            <li><i class="fas fa-lock"></i><strong> AES-GCM Encryption:</strong> Your input is encrypted on the fly—never stored.</li>
+            <li><i class="fas fa-bolt"></i><strong> Quantum Simulation:</strong> PennyLane circuits evaluate thousands of emergency scenarios in milliseconds.</li>
+            <li><i class="fas fa-robot"></i><strong> AI Context Parsing:</strong> GPT-driven prompts interpret your location and scenario.</li>
+          </ul>
+        </div>
+        <div class="col-md-6">
+          <ul>
+            <li><i class="fas fa-map-marker-alt"></i><strong> Geolocation:</strong> Secure reverse-geocoding pinpoints nearby NARCAN clinics and kits.</li>
+            <li><i class="fas fa-trash-alt"></i><strong> Ephemeral Data:</strong> All traces wiped after your session completes.</li>
+            <li><i class="fas fa-user-shield"></i><strong> No Personal Tracking:</strong> Use anonymously or with an account for extra scans.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Search Form -->
+    <section class="form-card shadow-lg">
+      <h3>Find NARCAN Near You</h3>
+      <form method="POST" class="mt-4">
+        {{ csrf_token() }}
+        <div class="form-row">
+          <div class="form-group col-md-6">
+            <label for="address">Your Location</label>
+            <input type="text" class="form-control" id="address" name="address"
+                   placeholder="123 Main St, City, State" required>
+          </div>
+          <div class="form-group col-md-6">
+            <label for="scenario">Emergency Context</label>
+            <select class="form-control" id="scenario" name="scenario">
+              <option value="overdose">Overdose Situation</option>
+              <option value="family">Family or Friend Emergency</option>
+              <option value="other">Other Urgent Need</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group mt-3">
+          <label for="model_selection">AI Model</label>
+          <select class="form-control" id="model_selection" name="model_selection">
+            <option value="openai">OpenAI</option>
+            
+          </select>
+        </div>
+        <button type="submit" class="btn btn-primary btn-lg btn-block mt-4">
+          <i class="fas fa-search"></i> Locate NARCAN
+        </button>
+      </form>
+    </section>
+
+  </div>
+
+  <!-- Footer -->
+  <footer class="text-center">
+    <small>© 2025 Quantum NARCAN Emergency Finder — Privacy first, response fast.</small>
+  </footer>
+
+  <!-- JS Assets -->
+  <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
+          integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/popper.min.js') }}"
+          integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
+          integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
 </body>
 </html>
-    """)
-
+""")
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
