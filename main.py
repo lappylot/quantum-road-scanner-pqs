@@ -1300,8 +1300,6 @@ class ReportForm(FlaskForm):
 def index():
     return redirect(url_for('home'))
 
-
-
 @app.route('/home', methods=['GET', 'POST'])
 async def home():
     """
@@ -1313,7 +1311,7 @@ async def home():
       • Full nav: Register / Login / Dashboard
       • All assets loaded with Subresource Integrity (SRI)
     """
-    # identify user & rate-limit
+    # Identify user & rate-limit
     if 'username' in session:
         user_id, is_admin = get_user_id(session['username']), session.get('is_admin', False)
     else:
@@ -1323,19 +1321,21 @@ async def home():
     results_html = None
 
     if request.method == 'POST':
-        address, scenario = sanitize_input(request.form['address']), sanitize_input(request.form['scenario'])
-        # simple validation
+        address  = sanitize_input(request.form['address'])
+        scenario = sanitize_input(request.form['scenario'])
+
         if not address or not scenario:
             error = "Please complete every field."
         else:
-            # rate-limit logic...
+            # Logged-in rate limit
             if user_id:
                 if not is_admin and not check_rate_limit(user_id):
                     error = "Rate limit exceeded—try again shortly."
             else:
+                # Anonymous limiter: 5 searches/hour
                 from datetime import datetime, timedelta
                 anon = session.get('anon_rate', {'count': 0, 'start': None})
-                now = datetime.now()
+                now  = datetime.now()
                 start = datetime.fromisoformat(anon['start']) if anon['start'] else now
                 if not anon['start'] or now - start > timedelta(hours=1):
                     anon = {'count': 1, 'start': now.isoformat()}
@@ -1345,17 +1345,17 @@ async def home():
                 if anon['count'] > 5:
                     error = "Anonymous limit reached—please wait an hour."
 
-        # perform scan if valid
         if not error:
             resp = await start_scan_route()
-            data = resp.get_json()
+            data = resp.get_json(silent=True) or {}
             if resp.status_code != 200:
                 error = data.get('error', 'An unexpected error occurred.')
             else:
-                md = data['result']
-                results_html = Markup(markdown2.markdown(md, extras=["fenced-code-blocks"]))
+                md = data.get('result', '')
+                results_html = Markup(
+                    markdown2.markdown(md, extras=["fenced-code-blocks"])
+                )
 
-    # render page
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
@@ -1509,7 +1509,8 @@ async def home():
   </nav>
 
   <div class="container">
-    <!-- Creator Bio -->
+
+    <!-- About the Creator -->
     <div class="card bio p-4">
       <h5>About the Creator</h5>
       <p>
@@ -1617,6 +1618,7 @@ async def home():
 </body>
 </html>
 """, error=error, results_html=results_html)
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     error_message = ""
