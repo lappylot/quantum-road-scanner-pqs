@@ -96,10 +96,10 @@ When launched, the app:
 
 5. **Stay Until Help Arrives**
 
-# Second Simulated Scan - Anchorage Alaska
+## Second Simulated Scan - Anchorage Alaska
 
 
-# 🧭 Quantum NARCAN Finder – Anchorage, Alaska Deployment
+### 🧭 Quantum NARCAN Finder – Anchorage, Alaska Deployment
 
 > ✅ **System Active**  
 > 🌐 Location: **Anchorage, AK**  
