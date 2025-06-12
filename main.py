@@ -1164,8 +1164,9 @@ async def scan_debris_for_route(
 You are a Quantum Hypertime Nanobot NARCAN Finder tasked with locating the nearest naloxone (NARCAN) resources in an emergency. Leverage quantum simulations, hypertime analysis, and environmental factors to ensure rapid, private, and accurate results.
 [/action]
 
-[locationreport]
-
+Current coordinates: Latitude {lat}, Longitude {lon}
+General Area Name: {street_name}
+Current Area: {destination}
 [/locationreport]
 
 [quantumreport]
