@@ -1300,224 +1300,224 @@ class ReportForm(FlaskForm):
 def index():
     return redirect(url_for('home'))
 
-
 @app.route('/home', methods=['GET', 'POST'])
 async def home():
     """
-    Landing page for the Quantum NARCAN Emergency Finder:
-    - Logged-in users: 13 searches per 15 minutes (unless admin)
-    - Anonymous users: 5 searches per hour by IP
+    Advanced dashboard‐style homepage for the Quantum NARCAN Finder:
+      • OpenAI‐only processing
+      • 13 searches / 15 min for logged‐in users, 5 searches / hour for anonymous
+      • Multi‐step UI with real‐time feedback and loading overlay
+      • Includes creator bio and “How It Works” explanation in a Carl Sagan style
     """
-    # Identify user or anonymous
+    # Identify user & rate-limit flags
     if 'username' in session:
-        user_id = get_user_id(session['username'])
+        user_id  = get_user_id(session['username'])
         is_admin = session.get('is_admin', False)
-        anon_key = None
     else:
-        user_id = None
+        user_id  = None
         is_admin = False
-        anon_key = f"anon:{request.remote_addr}"
 
+    error = None
+    results_html = None
+
+    # Handle form submission
     if request.method == 'POST':
-        # Gather & sanitize inputs
-        address  = sanitize_input(request.form.get('address'))
-        scenario = sanitize_input(request.form.get('scenario'))
-        model    = sanitize_input(request.form.get('model_selection'))
+        address  = sanitize_input(request.form['address'])
+        scenario = sanitize_input(request.form['scenario'])
+        model    = 'openai'
 
-        # Validate
-        if not all([address, scenario, model]):
-            flash("All fields are required.", "danger")
-            return redirect(url_for('home'))
-
-        # Rate-limit
-        if user_id:
-            if not is_admin and not check_rate_limit(user_id):
-                flash("Rate limit exceeded. Try again later.", "warning")
-                return redirect(url_for('home'))
+        # Validation
+        if not address or not scenario:
+            error = "Please complete every field."
         else:
-            # Anonymous: 5/hour by IP
-            if not check_rate_limit(anon_key, window=timedelta(hours=1), max_calls=2):
-                flash("Anonymous rate limit reached. Please wait an hour.", "warning")
-                return redirect(url_for('home'))
+            # Logged-in rate limit
+            if user_id:
+                if not is_admin and not check_rate_limit(user_id):
+                    error = "Rate limit exceeded—try again shortly."
+            else:
+                # Anonymous in-session limiter (5/hr)
+                anon = session.get('anon_rate', {'count': 0, 'start': None})
+                now  = datetime.now()
+                start = datetime.fromisoformat(anon['start']) if anon['start'] else now
+                if not anon['start'] or now - start > timedelta(hours=1):
+                    anon = {'count': 1, 'start': now.isoformat()}
+                else:
+                    anon['count'] += 1
+                session['anon_rate'] = anon
+                if anon['count'] > 5:
+                    error = "Anonymous limit reached—please wait an hour."
 
-        # Delegate to your NARCAN finder logic
-        return await start_narcan_finder_route()
+        # Execute search if no error
+        if not error:
+            resp = await start_narcan_finder_route()
+            data = resp.get_json()
+            if resp.status_code != 200:
+                error = data.get('error', 'An unexpected error occurred.')
+            else:
+                md = data['result']
+                results_html = Markup(markdown2.markdown(md, extras=["fenced-code-blocks"]))
 
-    # GET → render the advanced homepage
+    # Render the multi-step dashboard UI with bio & explanation
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Quantum NARCAN Emergency Finder</title>
-
-  <!-- Fonts & Icons -->
-  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
-        integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
-        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
-        integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
-
-  <!-- Bootstrap -->
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
+  <title>Quantum NARCAN Finder Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static','css/bootstrap.min.css') }}"
         integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-
+  <link href="{{ url_for('static','css/roboto.css') }}" rel="stylesheet"
+        integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+  <link href="{{ url_for('static','css/orbitron.css') }}" rel="stylesheet"
+        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static','css/fontawesome.min.css') }}"
+        integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
   <style>
-    /* Full-screen hero with overlay */
-    .hero {
-      position: relative;
-      height: 60vh;
-      background: url('{{ url_for('static','images/hero-bg.jpg') }}') center/cover no-repeat;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #fff;
-      text-align: center;
+    body { background: linear-gradient(135deg,#1e3c72 0%,#2a5298 100%); color:#fff; font-family:'Roboto'; }
+    .navbar { background:#000; }
+    .navbar-brand { font-family:'Orbitron'; color:#0ff; }
+    .container { max-width:800px; margin:2rem auto; }
+    .card { background:rgba(255,255,255,0.1); border:none; border-radius:0.75rem; }
+    .btn-primary { background:#0ff; color:#000; border:none; transition:background 0.3s; }
+    .btn-primary:hover { background:#0cc; }
+    .stepper { display:flex; justify-content:space-between; margin:2rem 0; }
+    .step { flex:1; position:relative; text-align:center; }
+    .step:not(:last-child)::after {
+      content:''; position:absolute; top:15px; right:0; width:100%; height:2px; background:#555;
     }
-    .hero::before {
-      content: '';
-      position: absolute; top: 0; left: 0;
-      width: 100%; height: 100%;
-      background: rgba(0,0,0,0.6);
+    .circle {
+      width:30px; height:30px; margin:0 auto 8px; line-height:30px;
+      border-radius:50%; background:#555; color:#fff;
     }
-    .hero .content {
-      position: relative;
-      z-index: 1;
-      animation: fadeInDown 1s ease-out;
+    .active .circle, .completed .circle { background:#0ff; color:#000; }
+    #overlay {
+      display:none; position:fixed; top:0; left:0; width:100%; height:100%;
+      background:rgba(0,0,0,0.7); z-index:999; align-items:center; justify-content:center;
     }
-    @keyframes fadeInDown {
-      from { opacity: 0; transform: translateY(-20px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-    .hero h1 {
-      font-family: 'Orbitron', sans-serif;
-      font-size: 3rem;
-      background: -webkit-linear-gradient(#f39c12, #d35400);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-    .hero p.tagline {
-      font-size: 1.25rem;
-    }
-    .usage-card, .form-card {
-      background: rgba(255,255,255,0.1);
-      border-radius: 0.75rem;
-      padding: 2rem;
-      margin-bottom: 2rem;
-    }
-    .usage-card i {
-      font-size: 1.5rem;
-      color: #f1c40f;
-      margin-right: 0.5rem;
-    }
-    .btn-primary {
-      background: #e67e22;
-      border: none;
-      transition: background 0.3s;
-    }
-    .btn-primary:hover {
-      background: #d35400;
-    }
-    footer {
-      background: #2c3e50;
-      color: #bdc3c7;
-      padding: 1rem 0;
-    }
+    #overlay .spinner-border { width:4rem; height:4rem; color:#0ff; }
+    .bio, .how-it-works { margin-bottom:2rem; }
+    .bio h5, .how-it-works h5 { font-family:'Orbitron'; color:#f39c12; }
+    .bio p, .how-it-works p, .how-it-works li { color:#e0e0e0; }
   </style>
 </head>
 <body>
 
-  <!-- Navbar -->
-  <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-    <a class="navbar-brand" href="{{ url_for('home') }}">NARCAN Finder</a>
-  </nav>
+<nav class="navbar">
+  <span class="navbar-brand mx-auto">Quantum NARCAN Finder</span>
+</nav>
 
-  <!-- Hero Section -->
-  <section class="hero">
-    <div class="content">
-      <h1>Quantum NARCAN Emergency Finder</h1>
-      <p class="tagline">Rapidly locate NARCAN resources with quantum-driven insights.</p>
-      <a href="#how-it-works" class="btn btn-light btn-lg mt-3">How It Works</a>
-    </div>
-  </section>
+<div class="container">
 
-  <div class="container py-5">
-
-    <!-- How It Works -->
-    <section id="how-it-works" class="usage-card">
-      <h2>How It Works</h2>
-      <p>
-        Our system ensures speed, privacy, and accuracy by combining:
-      </p>
-      <div class="row">
-        <div class="col-md-6">
-          <ul>
-            <li><i class="fas fa-lock"></i><strong> AES-GCM Encryption:</strong> Your input is encrypted on the fly—never stored.</li>
-            <li><i class="fas fa-bolt"></i><strong> Quantum Simulation:</strong> PennyLane circuits evaluate thousands of emergency scenarios in milliseconds.</li>
-            <li><i class="fas fa-robot"></i><strong> AI Context Parsing:</strong> GPT-driven prompts interpret your location and scenario.</li>
-          </ul>
-        </div>
-        <div class="col-md-6">
-          <ul>
-            <li><i class="fas fa-map-marker-alt"></i><strong> Geolocation:</strong> Secure reverse-geocoding pinpoints nearby NARCAN clinics and kits.</li>
-            <li><i class="fas fa-trash-alt"></i><strong> Ephemeral Data:</strong> All traces wiped after your session completes.</li>
-            <li><i class="fas fa-user-shield"></i><strong> No Personal Tracking:</strong> Use anonymously or with an account for extra scans.</li>
-          </ul>
-        </div>
-      </div>
-    </section>
-
-    <!-- Search Form -->
-    <section class="form-card shadow-lg">
-      <h3>Find NARCAN Near You</h3>
-      <form method="POST" class="mt-4">
-        {{ csrf_token() }}
-        <div class="form-row">
-          <div class="form-group col-md-6">
-            <label for="address">Your Location</label>
-            <input type="text" class="form-control" id="address" name="address"
-                   placeholder="123 Main St, City, State" required>
-          </div>
-          <div class="form-group col-md-6">
-            <label for="scenario">Emergency Context</label>
-            <select class="form-control" id="scenario" name="scenario">
-              <option value="overdose">Overdose Situation</option>
-              <option value="family">Family or Friend Emergency</option>
-              <option value="other">Other Urgent Need</option>
-            </select>
-          </div>
-        </div>
-        <div class="form-group mt-3">
-          <label for="model_selection">AI Model</label>
-          <select class="form-control" id="model_selection" name="model_selection">
-            <option value="openai">OpenAI</option>
-            
-          </select>
-        </div>
-        <button type="submit" class="btn btn-primary btn-lg btn-block mt-4">
-          <i class="fas fa-search"></i> Locate NARCAN
-        </button>
-      </form>
-    </section>
-
+  <!-- About the Creator (Carl Sagan style) -->
+  <div class="card bio p-4">
+    <h5>About the Creator</h5>
+    <p>
+      In the vast tapestry of existence, I found myself undone by an unseen poison—fentanyl
+      slipped into a simple vape. Rising from that ordeal, I embraced both recovery and purpose.
+      With each breath restored, I envisioned a brighter cosmos where every person could
+      navigate danger with confidence. This Finder, born of my journey, is my gift to those
+      who stand on the precipice between life and oblivion.
+    </p>
   </div>
 
-  <!-- Footer -->
-  <footer class="text-center">
-    <small>© 2025 Quantum NARCAN Emergency Finder — Privacy first, response fast.</small>
-  </footer>
+  <!-- How It Works (Cosmic explanation) -->
+  <div class="card how-it-works p-4">
+    <h5>How It Works</h5>
+    <p>
+      Imagine the universe as a sea of infinite possibilities. Here, our Quantum NARCAN Finder
+      sails beyond the horizon of classical limits:
+    </p>
+    <ul>
+      <li>
+        <strong>Quantum Hypertime Simulation:</strong> We harness qubits—delicate instruments
+        of computation—to explore myriad scenarios in parallel, much like waves dancing
+        across the cosmic ocean.
+      </li>
+      <li>
+        <strong>OpenAI Contextual Insight:</strong> A sublime mind techniques natural language
+        to interpret your location and need, ensuring that the guidance resonates with your
+        real-world crisis.
+      </li>
+      <li>
+        <strong>Ephemeral Encryption:</strong> Every query is shielded in AES-GCM armor,
+        encrypted in flight, and erased upon completion—leaving no trace but compassion.
+      </li>
+      <li>
+        <strong>Harm Reduction Ethos:</strong> No matter where you are, we reveal the nearest
+        lifelines—clinics, vending machines, or delivery networks—illuminating paths to hope.
+      </li>
+    </ul>
+  </div>
 
-  <!-- JS Assets -->
-  <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
-          integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
-  <script src="{{ url_for('static', filename='js/popper.min.js') }}"
-          integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
-  <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
-          integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+  <!-- Stepper -->
+  <div class="stepper">
+    <div class="step {% if not results_html and not error %}active{% else %}completed{% endif %}">
+      <div class="circle">1</div> Enter Info
+    </div>
+    <div class="step {% if request.method=='POST' and not results_html and not error %}active{% else %}completed{% endif %}">
+      <div class="circle">2</div> Searching
+    </div>
+    <div class="step {% if results_html or error %}active{% endif %}">
+      <div class="circle">3</div> Results
+    </div>
+  </div>
+
+  <!-- Error -->
+  {% if error %}
+    <div class="alert alert-warning text-dark">{{ error }}</div>
+  {% endif %}
+
+  <!-- Search Form -->
+  <div class="card mb-4 p-4">
+    <h5>Locate NARCAN Resources</h5>
+    <form id="finderForm" method="POST">
+      {{ csrf_token() }}
+      <div class="form-group">
+        <label>Your Location</label>
+        <input name="address" class="form-control" placeholder="123 Main St, City, State" required>
+      </div>
+      <div class="form-group mt-3">
+        <label>Emergency Context</label>
+        <select name="scenario" class="form-control">
+          <option value="overdose">Overdose Emergency</option>
+          <option value="family">Family/Friend at Risk</option>
+          <option value="other">Other Urgent Need</option>
+        </select>
+      </div>
+      <button id="submitBtn" class="btn btn-primary mt-4 w-100">
+        <i class="fas fa-search-location"></i> Find NARCAN
+      </button>
+    </form>
+  </div>
+
+  <!-- Results -->
+  {% if results_html %}
+    <div class="card mb-4 p-4">
+      <h5>Results</h5>
+      <hr style="border-color:#555;">
+      <div>{{ results_html }}</div>
+    </div>
+  {% endif %}
+
+</div>
+
+<!-- Loading Overlay -->
+<div id="overlay" class="d-flex">
+  <div class="spinner-border" role="status"></div>
+</div>
+
+<!-- JS -->
+<script>
+  document.getElementById('finderForm').addEventListener('submit', () => {
+    document.getElementById('overlay').style.display = 'flex';
+  });
+</script>
+<script src="{{ url_for('static','js/bootstrap.bundle.min.js') }}"
+        integrity="sha384-..." crossorigin="anonymous"></script>
 </body>
 </html>
-""")
+""", error=error, results_html=results_html)
+    
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
