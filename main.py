@@ -1161,42 +1161,113 @@ async def scan_debris_for_route(
     # 4) Build the OpenAI-only prompt
     openai_prompt = f"""
 [action]
-You are a Quantum Hypertime Nanobot NARCAN Finder tasked with locating the nearest naloxone (NARCAN) resources in an emergency. Leverage quantum simulations, hypertime analysis, and environmental factors to ensure rapid, private, and accurate results.
+You are a Quantum Hypertime Nanobot NARCAN Finder tasked with locating the nearest naloxone (NARCAN) resources in an emergency. Leverage quantum simulations, hypertime analysis, environmental context, and bioresonance matching to ensure rapid, private, and accurate results. Include **free access points**, **low-barrier recovery centers**, and **mutual aid networks** for people seeking both emergency aid and long-term recovery support.
 [/action]
 
-Current coordinates: Latitude {lat}, Longitude {lon}
-General Area Name: {street_name}
-Current Area: {destination}
-[/locationreport]
+[currentlocation]
+**Coordinates:** Latitude {lat}, Longitude {lon}  
+**Street/Zone:** {street_name}  
+**Current Sector:** {destination}  
+[/currentlocation]
 
 [quantumreport]
 **Quantum Scan State:** {quantum_results}  
-**System Performance:** CPU Usage: {cpu_usage}%, RAM Usage: {ram_usage}%
+**System Performance Metrics:**  
+- **CPU Usage:** {cpu_usage}%  
+- **RAM Usage:** {ram_usage}%  
 [/quantumreport]
 
 [reducefalsepositivesandnegatives]
-ACT by syncing to multiverse configurations optimized for lifesaving resource allocation
+Initiating multiversal sync: aligning to anti-overdose stabilization threads and probability-minimized error logic for humanitarian triage.
 [/reducefalsepositivesandnegatives]
 
-Please provide your findings in **Markdown** only, using clear headings and bullet lists:
+Please return results in **Markdown** format with the following structure:
 
-## Nearest NARCAN Access Points
-- List up to **5** closest clinics, pharmacies, or community stations stocking naloxone.
-- Include **name**, **address**, **distance (mi)**, and **estimated travel time (min)**.
+---
 
-## Resource Availability
-- For each location above, note **hours of operation** and **pickup method** (e.g. walk-in, vending machine).
+## 🔍 Nearest NARCAN Access Points
+List the **5 closest** known sites providing naloxone access:
+- **Name**
+- **Address**
+- **Distance:** _X miles_
+- **Estimated Travel Time:** _X minutes_
 
-## Emergency Delivery Options
-- If no location is within 5 miles, suggest any emergency courier or peer-to-peer delivery networks.
-- Include **network name** and **estimated delivery time (min)**.
+Example categories:  
+- Pharmacies (CVS, Walgreens)  
+- Hospitals  
+- Fire Stations  
+- Harm Reduction Sites  
+- Mobile Clinics  
+- Vending Machines
 
-## Privacy & Safety Notes
-- Recommend routes or methods that **maximize privacy** and **minimize exposure**.
+---
 
-## Usage Guidance
-- Provide concise, step-by-step instructions for **administering naloxone** in this scenario.
-    
+## 🕒 Resource Availability
+For each access point, include:
+- **Hours of Operation**
+- **Pickup Method** (e.g., walk-in, kiosk, vending machine, mobile van)
+- **Cost** (highlight **free** or low-cost options)
+
+---
+
+## 🚨 Emergency Delivery Options
+If no access within 5 miles:
+- List any **emergency peer delivery** or **mobile outreach teams**
+- Include:
+  - **Network or Service Name**
+  - **Coverage Area**
+  - **Estimated Arrival Time (min)**
+
+Examples:  
+- NEXT Distro  
+- NaloxBox Outreach  
+- Unity PeerRunner
+
+---
+
+## 🔐 Privacy & Safety Notes
+- Recommend **routes** with minimal public exposure or surveillance
+- Note **safe zones** for pick-up or transfer (e.g., back entrances, quiet side streets)
+- Prioritize **no-ID-required** pickup options
+
+---
+
+## 🧪 Free Services Nearby
+List **3–5 local free** services available within 10 miles:
+- **Service Name**
+- **Type** (e.g., testing, counseling, legal aid, showers, meals)
+- **Location**
+- **Operating Hours**
+- **Walk-in Available?** (Yes/No)
+
+---
+
+## 🛡️ Recovery & Support Centers
+Highlight **low-barrier** recovery options:
+- **Center Name**
+- **Services Offered** (e.g., detox, MAT, peer counseling, shelter)
+- **Contact Info**
+- **Open Beds / Availability** (if known)
+- **Free Intake?** (Yes/No)
+
+---
+
+## 🧭 Usage Guidance
+**How to Administer Naloxone (NARCAN Nasal Spray):**
+1. Check for responsiveness. Shout and gently shake the person.
+2. If unresponsive, call 911 immediately.
+3. Tilt head back. Insert nozzle into nostril.
+4. Press plunger to release the dose.
+5. Wait 2–3 minutes. If no response, administer second dose.
+6. Continue to monitor. Begin CPR if trained. Stay with person until help arrives.
+
+**Note:** Naloxone is safe to use even if unsure whether opioids are involved.
+
+---
+
+[missioncomplete]
+All findings delivered. Activate local rescue probability mesh if user requests manual override or timed delivery loop.
+[/missioncomplete]
     """
 
     # 5) Call OpenAI
