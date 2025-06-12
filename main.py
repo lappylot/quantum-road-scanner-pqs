@@ -1309,26 +1309,31 @@ async def home():
       • OpenAI‐only processing
       • 13 searches / 15 min for logged-in users, 5 searches / hour for anonymous
       • Multi-step UI with real-time feedback and loading overlay
-      • Creator bio and “How It Works” in a Carl Sagan style
+      • Creator bio & “How It Works” in a Carl Sagan style
       • Full nav: Register / Login / Dashboard
       • All assets loaded with Subresource Integrity (SRI)
-      • Results sanitized with Bleach and rendered into #resultsBox
+      • Results sanitized with Bleach into #resultsBox
     """
+    # Determine user & rate-limit state
     if 'username' in session:
-        user_id, is_admin = get_user_id(session['username']), session.get('is_admin', False)
+        user_id = get_user_id(session['username'])
+        is_admin = session.get('is_admin', False)
     else:
-        user_id, is_admin = None, False
+        user_id = None
+        is_admin = False
 
     error = None
-    md_html = ""  # sanitized HTML to inject
+    md_html = ""
 
     if request.method == 'POST':
         address  = sanitize_input(request.form['address'])
         scenario = sanitize_input(request.form['scenario'])
 
+        # basic validation
         if not address or not scenario:
             error = "Please complete every field."
         else:
+            # rate-limit logic
             if user_id:
                 if not is_admin and not check_rate_limit(user_id):
                     error = "Rate limit exceeded—try again shortly."
@@ -1345,6 +1350,7 @@ async def home():
                 if anon['count'] > 5:
                     error = "Anonymous limit reached—please wait an hour."
 
+        # if OK, fire off the scan
         if not error:
             resp = await start_scan_route()
             try:
@@ -1355,20 +1361,18 @@ async def home():
             if resp.status_code != 200:
                 error = (
                     data.get('error')
-                 or data.get('details')
-                 or f"Scan failed with status {resp.status_code}"
-                 or resp.data.decode(errors='ignore')
+                    or data.get('details')
+                    or f"Scan failed with status {resp.status_code}"
+                    or resp.data.decode(errors='ignore')
                 )
             else:
                 raw_md = data.get('result', "")
-                # render markdown
-                rendered = markdown2.markdown(raw_md, extras=["fenced-code-blocks"])
-                # sanitize with Bleach
-                allowed_tags = [
-                  'p','ul','ol','li','strong','em','br','code','pre','h1','h2','h3','h4','h5','h6'
-                ]
-                md_html = bleach.clean(rendered, tags=allowed_tags, strip=True)
+                rendered = markdown(raw_md, extras=["fenced-code-blocks"])
+                allowed = ['p','ul','ol','li','strong','em','br','code','pre',
+                           'h1','h2','h3','h4','h5','h6']
+                md_html = bleach.clean(rendered, tags=allowed, strip=True)
 
+    # Inline template string
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
@@ -1378,136 +1382,154 @@ async def home():
 
   <!-- Bootstrap CSS -->
   <link rel="stylesheet"
-        href="{{ url_for('static','css/bootstrap.min.css') }}"
+        href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
         integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo="
         crossorigin="anonymous">
 
   <!-- Roboto -->
   <link rel="stylesheet"
-        href="{{ url_for('static','css/roboto.css') }}"
+        href="{{ url_for('static', filename='css/roboto.css') }}"
         integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE="
         crossorigin="anonymous">
 
   <!-- Orbitron -->
   <link rel="stylesheet"
-        href="{{ url_for('static','css/orbitron.css') }}"
+        href="{{ url_for('static', filename='css/orbitron.css') }}"
         integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00="
         crossorigin="anonymous">
 
   <!-- FontAwesome -->
   <link rel="stylesheet"
-        href="{{ url_for('static','css/fontawesome.min.css') }}"
+        href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
         integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU="
         crossorigin="anonymous">
 
   <style>
-    /* ... your existing styles (body, navbar, container, cards, buttons, stepper, overlay, bio/how-it-works) ... */
-
-    /* Results box hidden until filled */
+    /* your existing overrides… */
     #resultsBox { display: none; }
+    #overlay {
+      display: none;
+      position: fixed;
+      top:0; left:0;
+      width:100%; height:100%;
+      background: rgba(0,0,0,0.6);
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+    }
   </style>
 </head>
 <body>
 
   <!-- Navbar -->
-  <nav class="navbar d-flex align-items-center">
-    <a class="navbar-brand" href="{{ url_for('home') }}">Quantum NARCAN Finder</a>
+  <nav class="navbar d-flex align-items-center px-4" style="background:#000;">
+    <a class="navbar-brand text-light" href="{{ url_for('home') }}">
+      Quantum NARCAN Finder
+    </a>
     <div class="ml-auto">
       {% if session.username %}
-        <a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a>
-        <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+        <a class="nav-link d-inline text-light" href="{{ url_for('dashboard') }}">Dashboard</a>
+        <a class="nav-link d-inline text-light" href="{{ url_for('logout') }}">Logout</a>
       {% else %}
-        <a class="nav-link" href="{{ url_for('login') }}">Login</a>
-        <a class="nav-link" href="{{ url_for('register') }}">Register</a>
+        <a class="nav-link d-inline text-light" href="{{ url_for('login') }}">Login</a>
+        <a class="nav-link d-inline text-light" href="{{ url_for('register') }}">Register</a>
       {% endif %}
     </div>
   </nav>
 
-  <div class="container">
+  <div class="container py-5">
     <!-- About the Creator -->
-    <div class="card bio p-4">
-      <h5>About the Creator</h5>
-      <p>…</p>
+    <div class="card mb-4 p-4" style="background:#112;">
+      <h5 class="text-info">About the Creator</h5>
+      <p class="text-light">In the vast tapestry… (your Carl Sagan–style bio here)…</p>
     </div>
 
     <!-- How It Works -->
-    <div class="card how-it-works p-4">
-      <h5>How It Works</h5>
-      <p>…</p>
-      <ul>…</ul>
+    <div class="card mb-4 p-4" style="background:#112;">
+      <h5 class="text-info">How It Works</h5>
+      <p class="text-light">Imagine the universe…</p>
+      <ul class="text-light">
+        <li><strong>Quantum Hypertime Simulation:</strong> …</li>
+        <li><strong>OpenAI Contextual Insight:</strong> …</li>
+        <li><strong>Ephemeral Encryption:</strong> …</li>
+        <li><strong>Harm Reduction Ethos:</strong> …</li>
+      </ul>
     </div>
 
     <!-- Stepper -->
-    <div class="stepper">
-      <div class="step {% if not md_html and not error %}active{% else %}completed{% endif %}">
-        <div class="circle">1</div> Enter Info
+    <div class="d-flex justify-content-between mb-4">
+      <div class="text-center">
+        <div class="badge badge-pill badge-{{ 'primary' if not md_html and not error else 'success' }}">1</div>
+        <div class="text-light">Enter Info</div>
       </div>
-      <div class="step {% if request.method=='POST' and not md_html and not error %}active{% else %}completed{% endif %}">
-        <div class="circle">2</div> Searching
+      <div class="text-center">
+        <div class="badge badge-pill badge-{{ 'primary' if request.method=='POST' and not (md_html or error) else 'success' }}">2</div>
+        <div class="text-light">Searching</div>
       </div>
-      <div class="step {% if md_html or error %}active{% endif %}">
-        <div class="circle">3</div> Results
+      <div class="text-center">
+        <div class="badge badge-pill badge-{{ 'primary' if md_html or error else 'secondary' }}">3</div>
+        <div class="text-light">Results</div>
       </div>
     </div>
 
-    <!-- Error -->
     {% if error %}
       <div class="alert alert-warning text-dark">{{ error }}</div>
     {% endif %}
 
     <!-- Search Form -->
-    <div class="card mb-4 p-4">
-      <h5>Locate NARCAN Resources</h5>
+    <div class="card mb-4 p-4" style="background:#112;">
+      <h5 class="text-info">Locate NARCAN Resources</h5>
       <form id="finderForm" method="POST">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
-          <label>Your Location</label>
-          <input name="address" class="form-control"
-                 placeholder="123 Main St, City, State" required>
+          <label class="text-light">Your Location</label>
+          <input name="address" class="form-control" placeholder="123 Main St, City, State" required>
         </div>
-        <div class="form-group mt-3">
-          <label>Emergency Context</label>
+        <div class="form-group">
+          <label class="text-light">Emergency Context</label>
           <select name="scenario" class="form-control">
             <option value="overdose">Overdose Emergency</option>
             <option value="family">Family/Friend at Risk</option>
             <option value="other">Other Urgent Need</option>
           </select>
         </div>
-        <button class="btn btn-primary mt-4 w-100">
+        <button class="btn btn-info btn-block mt-3">
           <i class="fas fa-search-location"></i> Find NARCAN
         </button>
       </form>
     </div>
 
     <!-- Results Box -->
-    <div id="resultsBox" class="card mb-4 p-4">
-      <h5>Results</h5>
+    <div id="resultsBox" class="card mb-4 p-4" style="background:#112;">
+      <h5 class="text-info">Results</h5>
       <hr style="border-color:#555;">
       {{ md_html|safe }}
     </div>
   </div>
 
-  <!-- Overlay -->
-  <div id="overlay">
-    <div class="spinner-border" role="status"></div>
+  <!-- Loading Overlay -->
+  <div id="overlay" class="d-flex">
+    <div class="spinner-border text-light" role="status"></div>
   </div>
 
   <!-- jQuery -->
   <script
-    src="{{ url_for('static','js/jquery.min.js') }}"
+    src="{{ url_for('static', filename='js/jquery.min.js') }}"
     integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
     crossorigin="anonymous"></script>
 
   <!-- Bootstrap JS -->
   <script
-    src="{{ url_for('static','js/bootstrap.bundle.min.js') }}"
+    src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"
     integrity="sha384-kenU1KFdBIe4zVF0s0G1M5b4hcpxyD9F7jL+khIYvI5Dz7YIivRkXWlGX5YkNhc+"
     crossorigin="anonymous"></script>
 
   <script>
+    // Show overlay on form submit
     document.getElementById('finderForm').addEventListener('submit', () => {
       document.getElementById('overlay').style.display = 'flex';
     });
+    // Reveal results box if we have HTML
     {% if md_html %}
       document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('resultsBox').style.display = 'block';
@@ -1517,6 +1539,7 @@ async def home():
 </body>
 </html>
 """, error=error, md_html=md_html)
+  
     
 
 @app.route('/login', methods=['GET', 'POST'])
