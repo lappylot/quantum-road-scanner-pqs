@@ -2857,32 +2857,48 @@ def calculate_harm_level(result):
 
 @app.route('/start_scan', methods=['POST'])
 async def start_scan_route():
-    if 'username' not in session:
-        return redirect(url_for('login'))
+    user_id = None
+    is_admin = False
 
-    username = session['username']
-    user_id = get_user_id(username)
+    # Determine user context
+    if 'username' in session:
+        username = session['username']
+        user_id = get_user_id(username)
+        is_admin = session.get('is_admin', False)
+        logger.debug(f"Authenticated scan request from user: {username} (admin={is_admin})")
+    else:
+        logger.debug("Anonymous scan request received.")
 
-    if not session.get('is_admin', False):
-        if not check_rate_limit(user_id):
+    # Enforce rate limit
+    if user_id:
+        if not is_admin and not check_rate_limit(user_id):
             return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
+    else:
+        anon = session.get('anon_rate', {'count': 0, 'start': None})
+        now = datetime.now()
+        start = datetime.fromisoformat(anon['start']) if anon['start'] else now
+        if not anon['start'] or (now - start > timedelta(hours=1)):
+            anon = {'count': 1, 'start': now.isoformat()}
+        else:
+            anon['count'] += 1
+        session['anon_rate'] = anon
+        if anon['count'] > 5:
+            return jsonify({"error": "Anonymous limit reached—please wait 1 hour."}), 429
 
-    data = request.get_json()
-
-    lat = data.get('latitude')
-    lon = data.get('longitude')
-    vehicle_type = data.get('vehicle_type')
-    destination = data.get('destination')
-    model_selection = data.get('model_selection')
-
-    lat = sanitize_input(lat)
-    lon = sanitize_input(lon)
-    vehicle_type = sanitize_input(vehicle_type)
-    destination = sanitize_input(destination)
-    model_selection = sanitize_input(model_selection)
+    # Parse and validate input
+    try:
+        data = request.get_json(force=True)
+        lat = sanitize_input(data.get('latitude'))
+        lon = sanitize_input(data.get('longitude'))
+        vehicle_type = sanitize_input(data.get('vehicle_type'))
+        destination = sanitize_input(data.get('destination'))
+        model_selection = sanitize_input(data.get('model_selection'))
+    except Exception as e:
+        logger.error("Invalid scan request payload: %s", e, exc_info=True)
+        return jsonify({"error": "Malformed input data."}), 400
 
     if not lat or not lon or not vehicle_type or not destination or not model_selection:
-        return jsonify({"error": "Missing required data"}), 400
+        return jsonify({"error": "Missing required fields."}), 400
 
     try:
         lat_float = float(lat)
@@ -2890,21 +2906,30 @@ async def start_scan_route():
     except ValueError:
         return jsonify({"error": "Invalid latitude or longitude format."}), 400
 
+    # Harm filtering
     combined_input = f"Vehicle Type: {vehicle_type}\nDestination: {destination}"
     is_allowed, analysis = await phf_filter_input(combined_input)
     if not is_allowed:
-        return jsonify({"error": "Input contains disallowed content.", "details": analysis}), 400
+        return jsonify({"error": "Input flagged by harm filter.", "details": analysis}), 400
 
+    # Perform quantum-enhanced NARCAN scan
     result, cpu_usage, ram_usage, quantum_results, street_name, model_used = await scan_debris_for_route(
-        lat_float, lon_float, vehicle_type, destination, user_id, selected_model=model_selection
+        lat_float, lon_float, vehicle_type, destination, user_id or 0, selected_model=model_selection
     )
 
     harm_level = calculate_harm_level(result)
 
-    report_id = save_hazard_report(
-        lat_float, lon_float, street_name, vehicle_type, destination, result,
-        cpu_usage, ram_usage, quantum_results, user_id, harm_level, model_used
-    )
+    # Save result if authenticated
+    report_id = None
+    if user_id:
+        try:
+            report_id = save_hazard_report(
+                lat_float, lon_float, street_name, vehicle_type, destination,
+                result, cpu_usage, ram_usage, quantum_results, user_id,
+                harm_level, model_used
+            )
+        except Exception as e:
+            logger.error("Failed to save scan report for user_id=%s: %s", user_id, e, exc_info=True)
 
     return jsonify({
         "message": "Scan completed successfully",
@@ -2912,7 +2937,8 @@ async def start_scan_route():
         "harm_level": harm_level,
         "model_used": model_used,
         "report_id": report_id
-    })
+    }), 200
+
 
 @app.route('/reverse_geocode', methods=['GET'])
 async def reverse_geocode_route():
