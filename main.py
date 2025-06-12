@@ -1300,6 +1300,7 @@ class ReportForm(FlaskForm):
 def index():
     return redirect(url_for('home'))
 
+    
 @app.route('/home', methods=['GET', 'POST'])
 async def home():
     """
@@ -1364,13 +1365,15 @@ async def home():
 <head>
   <meta charset="UTF-8">
   <title>Quantum NARCAN Finder Dashboard</title>
-  <link rel="stylesheet" href="{{ url_for('static','css/bootstrap.min.css') }}"
+
+  <!-- CSS with SRI -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
         integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-  <link href="{{ url_for('static','css/roboto.css') }}" rel="stylesheet"
+  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
         integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-  <link href="{{ url_for('static','css/orbitron.css') }}" rel="stylesheet"
+  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
         integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-  <link rel="stylesheet" href="{{ url_for('static','css/fontawesome.min.css') }}"
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
         integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
   <style>
     body { background: linear-gradient(135deg,#1e3c72 0%,#2a5298 100%); color:#fff; font-family:'Roboto'; }
@@ -1408,7 +1411,7 @@ async def home():
 
 <div class="container">
 
-  <!-- About the Creator (Carl Sagan style) -->
+  <!-- About the Creator -->
   <div class="card bio p-4">
     <h5>About the Creator</h5>
     <p>
@@ -1420,7 +1423,7 @@ async def home():
     </p>
   </div>
 
-  <!-- How It Works (Cosmic explanation) -->
+  <!-- How It Works -->
   <div class="card how-it-works p-4">
     <h5>How It Works</h5>
     <p>
@@ -1512,13 +1515,11 @@ async def home():
     document.getElementById('overlay').style.display = 'flex';
   });
 </script>
-<script src="{{ url_for('static','js/bootstrap.bundle.min.js') }}"
+<script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"
         integrity="sha384-..." crossorigin="anonymous"></script>
 </body>
 </html>
 """, error=error, results_html=results_html)
-    
-
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     error_message = ""
