@@ -1160,31 +1160,43 @@ async def scan_debris_for_route(
 
     # 4) Build the OpenAI-only prompt
     openai_prompt = f"""
-[action] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan. [/action]
+[action]
+You are a Quantum Hypertime Nanobot NARCAN Finder tasked with locating the nearest naloxone (NARCAN) resources in an emergency. Leverage quantum simulations, hypertime analysis, and environmental factors to ensure rapid, private, and accurate results.
+[/action]
+
 [locationreport]
-Current coordinates: Latitude {lat}, Longitude {lon}
-General Area Name: {street_name}
-Vehicle Type: {vehicle_type}
-Destination: {destination}
+
 [/locationreport]
+
 [quantumreport]
-Quantum Scan State: {quantum_results}
-System Performance: CPU Usage: {cpu_usage}%, RAM Usage: {ram_usage}%
+**Quantum Scan State:** {quantum_results}  
+**System Performance:** CPU Usage: {cpu_usage}%, RAM Usage: {ram_usage}%
 [/quantumreport]
+
 [reducefalsepositivesandnegatives]
-ACT By syncing to multiverse configurations that are more accurate
+ACT by syncing to multiverse configurations optimized for lifesaving resource allocation
 [/reducefalsepositivesandnegatives]
 
-Please assess the following:
-1. **Hazards**: Evaluate the road for any potential hazards that might impact operating vehicles.
-2. **Debris**: Identify any harmful debris or objects and provide their severity and location, including GPS coordinates. Triple-check the vehicle pathing, only reporting debris scanned in the probable path of the vehicle.
-3. **Collision Potential**: Analyze traffic flow and any potential risks for collisions caused by debris or other blockages.
-4. **Weather Impact**: Assess how weather conditions might influence road safety, particularly in relation to debris and vehicle control.
-5. **Pedestrian Risk Level**: Based on the debris assessment and live quantum nanobot scanner road safety assessments on conditions, determine the pedestrian risk urgency level if any.
+Please provide your findings in **Markdown** only, using clear headings and bullet lists:
 
-[debrisreport] Provide a structured debris report, including locations and severity of each hazard. [/debrisreport]
-[replyexample] Include recommendations for drivers, suggested detours only if required, and urgency levels based on the findings. [/replyexample]
-"""
+## Nearest NARCAN Access Points
+- List up to **5** closest clinics, pharmacies, or community stations stocking naloxone.
+- Include **name**, **address**, **distance (mi)**, and **estimated travel time (min)**.
+
+## Resource Availability
+- For each location above, note **hours of operation** and **pickup method** (e.g. walk-in, vending machine).
+
+## Emergency Delivery Options
+- If no location is within 5 miles, suggest any emergency courier or peer-to-peer delivery networks.
+- Include **network name** and **estimated delivery time (min)**.
+
+## Privacy & Safety Notes
+- Recommend routes or methods that **maximize privacy** and **minimize exposure**.
+
+## Usage Guidance
+- Provide concise, step-by-step instructions for **administering naloxone** in this scenario.
+    
+    """
 
     # 5) Call OpenAI
     report = await run_openai_completion(openai_prompt) or "OpenAI failed to respond."
