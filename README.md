@@ -1,6 +1,7 @@
 # 🧠 Quantum NARCAN Finder
 
-The **Quantum NARCAN Finder** is a prototype desktop application built by **Graylan** to assist in real-time opioid overdose risk assessment and NARCAN (naloxone) access scanning. It combines quantum simulations, system metrics, hypertime evaluation, and AI-generated intelligence to offer urgent, potentially life-saving reports — starting with deployment in **Greenville, SC** and surrounding areas.
+The **Quantum NARCAN Finder** is a web 
+application built by **Graylan** to assist in real-time opioid overdose risk assessment and NARCAN (naloxone) access scanning. It combines quantum simulations, system metrics, hypertime evaluation, and AI-generated intelligence to offer urgent, potentially life-saving reports — starting with deployment in **Greenville, SC** and surrounding areas.The second Simulated Scan committed to Anchorage Alaska.
 
 > 🔗 [View on GitHub](https://github.com/dosh41126/quantum-narcan-finder/tree/main)
 
