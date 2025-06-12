@@ -193,7 +193,7 @@ When launched, the app:
 - `OpenAI GPT-4o`
 - `PennyLane (Quantum QNode)`
 - `AES-GCM Encryption`
-- `Tkinter Desktop UI`
+- `Async Flask`
 - `httpx`, `psutil`, `aiosqlite`
 
 ---
