@@ -1306,62 +1306,60 @@ def index():
 @app.route('/home', methods=['GET', 'POST'])
 async def home():
     """
-    Quantum NARCAN Finder: Secure async route with full UI and fixed SRI
+    Advanced dashboard‐style homepage for the Quantum NARCAN Finder:
+      • Shows Creator bio + “How It Works”
+      • Multi-step UI with real-time spinner overlay
+      • Delegates to start_scan_route() (JSON) for POST scans
+      • Unified rate-limit logic (user & anon) in start_scan_route
+      • Sanitizes & renders Markdown results
     """
+    # ——— Identify user ———
     if 'username' in session:
-        user_id = get_user_id(session['username'])
+        user_id  = get_user_id(session['username'])
         is_admin = session.get('is_admin', False)
     else:
         user_id, is_admin = None, False
 
-    error = None
-    md_html = ""
+    error   = None
+    md_html = ""  # will hold sanitized HTML from Markdown
 
     if request.method == 'POST':
-        address = sanitize_input(request.form.get('address', ''))
+        # ——— Grab & sanitize inputs ———
+        address  = sanitize_input(request.form.get('address',  ''))
         scenario = sanitize_input(request.form.get('scenario', ''))
 
         if not address or not scenario:
             error = "Please complete every field."
         else:
-            if user_id:
-                if not is_admin and not check_rate_limit(user_id):
-                    error = "Rate limit exceeded—try again shortly."
-            else:
-                from datetime import datetime, timedelta
-                anon = session.get('anon_rate', {'count': 0, 'start': None})
-                now = datetime.now()
-                start = datetime.fromisoformat(anon['start']) if anon['start'] else now
-                if not anon['start'] or (now - start > timedelta(hours=1)):
-                    anon = {'count': 1, 'start': now.isoformat()}
-                else:
-                    anon['count'] += 1
-                session['anon_rate'] = anon
-                if anon['count'] > 5:
-                    error = "Anonymous limit reached—please wait an hour."
-
-        if not error:
+            # ——— Call the JSON scan endpoint internally ———
             resp = await start_scan_route()
             try:
                 data = resp.get_json(force=True) or {}
-            except:
+            except Exception:
                 data = {}
+
             if resp.status_code != 200:
+                # pick the best error message
                 error = (
                     data.get('error')
                     or data.get('details')
                     or f"Scan failed with status {resp.status_code}"
-                    or resp.data.decode(errors='ignore')
                 )
             else:
-                raw_md = data.get('result', "")
-                rendered = markdown(raw_md, extras=["fenced-code-blocks"])
+                raw_md = data.get('result', '')
+                # render Markdown to HTML
+                rendered = markdown(
+                    raw_md,
+                    extras=["fenced-code-blocks", "tables"]
+                )
+                # sanitize
                 allowed_tags = [
-                    'p','ul','ol','li','strong','em','br','code','pre',
-                    'h1','h2','h3','h4','h5','h6'
+                    'p','ul','ol','li','strong','em','br',
+                    'code','pre','h1','h2','h3','h4','h5','h6'
                 ]
                 md_html = bleach.clean(rendered, tags=allowed_tags, strip=True)
 
+    # ——— Finally render the page ———
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
@@ -1369,24 +1367,21 @@ async def home():
   <meta charset="UTF-8">
   <title>Quantum NARCAN Finder</title>
 
-  <!-- Bootstrap -->
+  <!-- Bootstrap CSS -->
   <link rel="stylesheet"
         href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
         integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo="
         crossorigin="anonymous">
-
   <!-- Roboto -->
   <link rel="stylesheet"
         href="{{ url_for('static', filename='css/roboto.css') }}"
         integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE="
         crossorigin="anonymous">
-
   <!-- Orbitron -->
   <link rel="stylesheet"
         href="{{ url_for('static', filename='css/orbitron.css') }}"
         integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00="
         crossorigin="anonymous">
-
   <!-- FontAwesome -->
   <link rel="stylesheet"
         href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
@@ -1395,19 +1390,30 @@ async def home():
 
   <style>
     body { font-family: 'Roboto', sans-serif; background: #111; color: #ddd; }
-    .navbar { background-color: #000; padding: 1rem; }
-    .navbar-brand { color: #00f0ff; font-family: 'Orbitron', sans-serif; }
+    .navbar { background: #000; padding: 1rem; }
+    .navbar-brand { color: #0ff; font-family: 'Orbitron', sans-serif; }
     .nav-link { color: #aaa; margin-left: 1rem; }
-    .card { background-color: #222; border-color: #444; }
-    .stepper .circle { width: 24px; height: 24px; border-radius: 50%; background: #00f0ff; color: #000; text-align: center; line-height: 24px; font-weight: bold; }
-    #overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); align-items: center; justify-content: center; z-index: 9999; }
+    .card { background: #222; border-color: #444; }
+    .stepper .circle {
+      width: 24px; height: 24px; border-radius: 50%;
+      background: #0ff; color: #000; text-align: center;
+      line-height: 24px; font-weight: bold;
+    }
+    /* overlay spinner */
+    #overlay { display: none; position: fixed; top:0; left:0;
+               width:100%; height:100%; background:rgba(0,0,0,0.7);
+               align-items:center; justify-content:center; z-index:9999; }
     #overlay.show { display: flex; }
+    /* hide results until ready */
     #resultsBox { display: none; }
   </style>
 </head>
 <body>
+  <!-- Navbar -->
   <nav class="navbar">
-    <a class="navbar-brand" href="{{ url_for('home') }}">Quantum NARCAN Finder</a>
+    <a class="navbar-brand" href="{{ url_for('home') }}">
+      Quantum NARCAN Finder
+    </a>
     <div class="ml-auto">
       {% if session.username %}
         <a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a>
@@ -1420,38 +1426,56 @@ async def home():
   </nav>
 
   <div class="container my-4">
-    <div class="card bio mb-4 p-4">
+    <!-- Creator Bio -->
+    <div class="card mb-4 p-4">
       <h5>About the Creator</h5>
-      <p>In the vast tapestry of existence, I found myself undone by an unseen poison—fentanyl slipped into a simple vape. Rising from that ordeal, I embraced both recovery and purpose. With each breath restored, I envisioned a brighter cosmos where every person could navigate danger with confidence.</p>
+      <p>
+        In the vast tapestry of existence, I found myself undone by an unseen
+        poison—fentanyl slipped into a simple vape. Rising from that ordeal,
+        I embraced both recovery and purpose. With each breath restored,
+        I envisioned a brighter cosmos where every person could navigate
+        danger with confidence.
+      </p>
     </div>
 
-    <div class="card how-it-works mb-4 p-4">
+    <!-- How It Works -->
+    <div class="card mb-4 p-4">
       <h5>How It Works</h5>
       <ul>
-        <li><strong>Quantum Hypertime Simulation:</strong> Multiversal probabilities explored in real-time.</li>
-        <li><strong>OpenAI Contextual Insight:</strong> Deep prompt logic analyzes intent and geography.</li>
-        <li><strong>Ephemeral Encryption:</strong> AES-GCM encrypts queries in transit, auto-destroyed after scan.</li>
+        <li><strong>Quantum Hypertime Simulation:</strong> Multiversal probabilities in real time.</li>
+        <li><strong>OpenAI Contextual Insight:</strong> Deep prompt logic analyzes intent & geography.</li>
+        <li><strong>Ephemeral Encryption:</strong> AES-GCM shields & auto-destroys queries.</li>
         <li><strong>Harm Reduction Ethos:</strong> Real help, not judgment.</li>
       </ul>
     </div>
 
+    <!-- Stepper -->
     <div class="stepper mb-4 d-flex justify-content-between">
-      <div class="step {% if not md_html and not error %}active{% else %}completed{% endif %}"><div class="circle">1</div> Enter Info</div>
-      <div class="step {% if request.method=='POST' and not md_html and not error %}active{% else %}completed{% endif %}"><div class="circle">2</div> Searching</div>
-      <div class="step {% if md_html or error %}active{% endif %}"><div class="circle">3</div> Results</div>
+      <div class="step {% if not md_html and not error %}active{% else %}completed{% endif %}">
+        <div class="circle">1</div> Enter Info
+      </div>
+      <div class="step {% if request.method=='POST' and not md_html and not error %}active{% else %}completed{% endif %}">
+        <div class="circle">2</div> Searching
+      </div>
+      <div class="step {% if md_html or error %}active{% endif %}">
+        <div class="circle">3</div> Results
+      </div>
     </div>
 
+    <!-- Error Message -->
     {% if error %}
       <div class="alert alert-warning text-dark">{{ error }}</div>
     {% endif %}
 
+    <!-- Search Form -->
     <div class="card mb-4 p-4">
       <h5>Locate NARCAN Resources</h5>
       <form id="finderForm" method="POST">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
           <label>Your Location</label>
-          <input name="address" class="form-control" placeholder="123 Main St, City, State" required>
+          <input name="address" class="form-control"
+                 placeholder="123 Main St, City, State" required>
         </div>
         <div class="form-group mt-3">
           <label>Emergency Context</label>
@@ -1461,10 +1485,13 @@ async def home():
             <option value="other">Other Urgent Need</option>
           </select>
         </div>
-        <button class="btn btn-primary mt-4 w-100"><i class="fas fa-search-location"></i> Find NARCAN</button>
+        <button class="btn btn-primary mt-4 w-100">
+          <i class="fas fa-search-location"></i> Find NARCAN
+        </button>
       </form>
     </div>
 
+    <!-- Results -->
     <div id="resultsBox" class="card mb-4 p-4">
       <h5>Results</h5>
       <hr style="border-color:#555;">
@@ -1472,14 +1499,15 @@ async def home():
     </div>
   </div>
 
+  <!-- Overlay Spinner -->
   <div id="overlay">
     <div class="spinner-border text-info" role="status"></div>
   </div>
 
+  <!-- jQuery & Bootstrap JS -->
   <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
           integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
           crossorigin="anonymous"></script>
-
   <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"
           integrity="sha384-kenU1KFdBIe4zVF0s0G1M5b4hcpxyD9F7jL+khIYvI5Dz7YIivRkXWlGX5YkNhc+"
           crossorigin="anonymous"></script>
@@ -1493,15 +1521,13 @@ async def home():
       {% endif %}
     });
     document.getElementById('finderForm').addEventListener('submit', () => {
-      setTimeout(() => {
-        overlay.classList.add('show');
-      }, 100);
+      // show spinner just after submit
+      setTimeout(() => overlay.classList.add('show'), 100);
     });
   </script>
 </body>
 </html>
-""", error=error, md_html=md_html)
-
+    """, error=error, md_html=md_html)
  
 
 
