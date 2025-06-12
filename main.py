@@ -1300,17 +1300,20 @@ class ReportForm(FlaskForm):
 def index():
     return redirect(url_for('home'))
 
+
+
 @app.route('/home', methods=['GET', 'POST'])
 async def home():
     """
     Advanced dashboard‐style homepage for the Quantum NARCAN Finder:
       • OpenAI‐only processing
-      • 13 searches / 15 min for logged‐in users, 5 searches / hour for anonymous
-      • Multi‐step UI with real‐time feedback and loading overlay
+      • 13 searches / 15 min for logged-in users, 5 searches / hour for anonymous
+      • Multi-step UI with real-time feedback and loading overlay
       • Creator bio and “How It Works” in a Carl Sagan style
-      • Full navigation: Register / Login / Dashboard
+      • Full nav: Register / Login / Dashboard
+      • All assets loaded with Subresource Integrity (SRI)
     """
-    # Identify user & rate-limit flags
+    # identify user & rate-limit
     if 'username' in session:
         user_id, is_admin = get_user_id(session['username']), session.get('is_admin', False)
     else:
@@ -1320,23 +1323,19 @@ async def home():
     results_html = None
 
     if request.method == 'POST':
-        address  = sanitize_input(request.form['address'])
-        scenario = sanitize_input(request.form['scenario'])
-        model    = 'openai'
-
-        # Validation
+        address, scenario = sanitize_input(request.form['address']), sanitize_input(request.form['scenario'])
+        # simple validation
         if not address or not scenario:
             error = "Please complete every field."
         else:
-            # Logged-in limiter
+            # rate-limit logic...
             if user_id:
                 if not is_admin and not check_rate_limit(user_id):
                     error = "Rate limit exceeded—try again shortly."
             else:
-                # Anonymous 5/hr limiter
                 from datetime import datetime, timedelta
                 anon = session.get('anon_rate', {'count': 0, 'start': None})
-                now  = datetime.now()
+                now = datetime.now()
                 start = datetime.fromisoformat(anon['start']) if anon['start'] else now
                 if not anon['start'] or now - start > timedelta(hours=1):
                     anon = {'count': 1, 'start': now.isoformat()}
@@ -1346,18 +1345,17 @@ async def home():
                 if anon['count'] > 5:
                     error = "Anonymous limit reached—please wait an hour."
 
-        # Execute search if no error
+        # perform scan if valid
         if not error:
-            resp = await start_narcan_finder_route()
+            resp = await start_scan_route()
             data = resp.get_json()
             if resp.status_code != 200:
                 error = data.get('error', 'An unexpected error occurred.')
             else:
                 md = data['result']
-                results_html = Markup(
-                    markdown2.markdown(md, extras=["fenced-code-blocks"])
-                )
+                results_html = Markup(markdown2.markdown(md, extras=["fenced-code-blocks"]))
 
+    # render page
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
@@ -1365,95 +1363,138 @@ async def home():
   <meta charset="UTF-8">
   <title>Quantum NARCAN Finder</title>
 
-  <!-- CSS with SRI -->
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-        integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
-        integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
-        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
-        integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
+  <!-- Bootstrap CSS -->
+  <link rel="stylesheet"
+        href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
+        integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo="
+        crossorigin="anonymous">
+
+  <!-- Roboto -->
+  <link rel="stylesheet"
+        href="{{ url_for('static', filename='css/roboto.css') }}"
+        integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE="
+        crossorigin="anonymous">
+
+  <!-- Orbitron -->
+  <link rel="stylesheet"
+        href="{{ url_for('static', filename='css/orbitron.css') }}"
+        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00="
+        crossorigin="anonymous">
+
+  <!-- FontAwesome -->
+  <link rel="stylesheet"
+        href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
+        integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU="
+        crossorigin="anonymous">
 
   <style>
     body {
       background: linear-gradient(135deg,#1e3c72 0%,#2a5298 100%);
-      color:#fff; font-family:'Roboto';
+      color: #fff;
+      font-family: 'Roboto', sans-serif;
     }
     .navbar {
-      background:#000; padding:0.75rem 1rem;
+      background: #000;
+      padding: 0.75rem 1rem;
     }
     .navbar-brand {
-      font-family:'Orbitron'; color:#0ff; font-size:1.5rem;
+      font-family: 'Orbitron', sans-serif;
+      color: #0ff;
+      font-size: 1.5rem;
     }
     .nav-link {
-      color:#fff; margin-left:1rem; text-decoration:none;
+      color: #fff;
+      margin-left: 1rem;
+      text-decoration: none;
     }
     .nav-link:hover {
-      color:#0cc;
+      color: #0cc;
     }
     .container {
-      max-width:800px; margin:2rem auto;
+      max-width: 800px;
+      margin: 2rem auto;
     }
     .card {
-      background:rgba(255,255,255,0.1); border:none;
-      border-radius:0.75rem; margin-bottom:2rem;
+      background: rgba(255,255,255,0.1);
+      border: none;
+      border-radius: 0.75rem;
+      margin-bottom: 2rem;
     }
     .btn-primary {
-      background:#0ff; color:#000; border:none;
-      transition:background 0.3s;
+      background: #0ff;
+      color: #000;
+      border: none;
+      transition: background 0.3s;
     }
     .btn-primary:hover {
-      background:#0cc;
+      background: #0cc;
     }
-
     /* Stepper */
     .stepper {
-      display:flex; justify-content:space-between;
-      align-items:center; margin:2rem 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 2rem 0;
     }
     .step {
-      flex:1; position:relative; text-align:center;
+      flex: 1;
+      position: relative;
+      text-align: center;
     }
     .step:not(:last-child)::after {
-      content:''; position:absolute;
-      top:50%; right:0;
-      width:calc(100% - 30px); height:2px;
-      background:#555; transform:translateY(-50%);
+      content: '';
+      position: absolute;
+      top: 50%;
+      right: 0;
+      width: calc(100% - 30px);
+      height: 2px;
+      background: #555;
+      transform: translateY(-50%);
     }
     .circle {
-      width:30px; height:30px; margin:0 auto 8px;
-      line-height:30px; border-radius:50%;
-      background:#555; color:#fff;
+      width: 30px;
+      height: 30px;
+      margin: 0 auto 8px;
+      line-height: 30px;
+      border-radius: 50%;
+      background: #555;
+      color: #fff;
     }
     .active .circle,
     .completed .circle {
-      background:#0ff; color:#000;
+      background: #0ff;
+      color: #000;
     }
-
     /* Loading overlay */
     #overlay {
-      display:none; position:fixed;
-      top:0; left:0; width:100%; height:100%;
-      background:rgba(0,0,0,0.7);
-      z-index:999;
-      align-items:center; justify-content:center;
+      display: none;
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.7);
+      z-index: 999;
+      align-items: center;
+      justify-content: center;
     }
     #overlay .spinner-border {
-      width:4rem; height:4rem; color:#0ff;
+      width: 4rem;
+      height: 4rem;
+      color: #0ff;
     }
-
     /* Bio & How It Works */
     .bio h5, .how-it-works h5 {
-      font-family:'Orbitron'; color:#f39c12; margin-bottom:0.5rem;
+      font-family: 'Orbitron', sans-serif;
+      color: #f39c12;
+      margin-bottom: 0.5rem;
     }
     .bio p, .how-it-works p, .how-it-works li {
-      color:#e0e0e0;
+      color: #e0e0e0;
     }
   </style>
 </head>
 <body>
 
+  <!-- Navbar -->
   <nav class="navbar d-flex align-items-center">
     <a class="navbar-brand" href="{{ url_for('home') }}">Quantum NARCAN Finder</a>
     <div class="ml-auto">
@@ -1468,8 +1509,7 @@ async def home():
   </nav>
 
   <div class="container">
-
-    <!-- About the Creator -->
+    <!-- Creator Bio -->
     <div class="card bio p-4">
       <h5>About the Creator</h5>
       <p>
@@ -1514,7 +1554,7 @@ async def home():
       </div>
     </div>
 
-    <!-- Error Message -->
+    <!-- Error -->
     {% if error %}
       <div class="alert alert-warning text-dark">{{ error }}</div>
     {% endif %}
@@ -1523,7 +1563,6 @@ async def home():
     <div class="card mb-4 p-4">
       <h5>Locate NARCAN Resources</h5>
       <form id="finderForm" method="POST">
-        <!-- hidden CSRF token -->
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
           <label>Your Location</label>
@@ -1551,7 +1590,6 @@ async def home():
         <div>{{ results_html }}</div>
       </div>
     {% endif %}
-
   </div>
 
   <!-- Loading Overlay -->
@@ -1559,19 +1597,26 @@ async def home():
     <div class="spinner-border" role="status"></div>
   </div>
 
-  <!-- JS -->
+  <!-- jQuery -->
+  <script
+    src="{{ url_for('static', filename='js/jquery.min.js') }}"
+    integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
+    crossorigin="anonymous"></script>
+
+  <!-- Bootstrap Bundle JS -->
+  <script
+    src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"
+    integrity="sha384-kenU1KFdBIe4zVF0s0G1M5b4hcpxyD9F7jL+khIYvI5Dz7YIivRkXWlGX5YkNhc+"
+    crossorigin="anonymous"></script>
+
   <script>
     document.getElementById('finderForm').addEventListener('submit', () => {
       document.getElementById('overlay').style.display = 'flex';
     });
   </script>
-  <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"
-          integrity="sha384-..." crossorigin="anonymous"></script>
 </body>
 </html>
 """, error=error, results_html=results_html)
-
-
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     error_message = ""
