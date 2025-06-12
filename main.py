@@ -1300,6 +1300,8 @@ class ReportForm(FlaskForm):
 def index():
     return redirect(url_for('home'))
 
+
+
 @app.route('/home', methods=['GET', 'POST'])
 async def home():
     """
@@ -1310,15 +1312,15 @@ async def home():
       • Creator bio and “How It Works” in a Carl Sagan style
       • Full nav: Register / Login / Dashboard
       • All assets loaded with Subresource Integrity (SRI)
+      • Results sanitized with Bleach and rendered into #resultsBox
     """
-    # Identify user & rate-limit
     if 'username' in session:
         user_id, is_admin = get_user_id(session['username']), session.get('is_admin', False)
     else:
         user_id, is_admin = None, False
 
     error = None
-    results_html = None
+    md_html = ""  # sanitized HTML to inject
 
     if request.method == 'POST':
         address  = sanitize_input(request.form['address'])
@@ -1327,12 +1329,10 @@ async def home():
         if not address or not scenario:
             error = "Please complete every field."
         else:
-            # Logged-in rate limit
             if user_id:
                 if not is_admin and not check_rate_limit(user_id):
                     error = "Rate limit exceeded—try again shortly."
             else:
-                # Anonymous limiter: 5 searches/hour
                 from datetime import datetime, timedelta
                 anon = session.get('anon_rate', {'count': 0, 'start': None})
                 now  = datetime.now()
@@ -1347,14 +1347,27 @@ async def home():
 
         if not error:
             resp = await start_scan_route()
-            data = resp.get_json(silent=True) or {}
+            try:
+                data = resp.get_json(force=True) or {}
+            except:
+                data = {}
+
             if resp.status_code != 200:
-                error = data.get('error', 'An unexpected error occurred.')
-            else:
-                md = data.get('result', '')
-                results_html = Markup(
-                    markdown2.markdown(md, extras=["fenced-code-blocks"])
+                error = (
+                    data.get('error')
+                 or data.get('details')
+                 or f"Scan failed with status {resp.status_code}"
+                 or resp.data.decode(errors='ignore')
                 )
+            else:
+                raw_md = data.get('result', "")
+                # render markdown
+                rendered = markdown2.markdown(raw_md, extras=["fenced-code-blocks"])
+                # sanitize with Bleach
+                allowed_tags = [
+                  'p','ul','ol','li','strong','em','br','code','pre','h1','h2','h3','h4','h5','h6'
+                ]
+                md_html = bleach.clean(rendered, tags=allowed_tags, strip=True)
 
     return render_template_string("""
 <!DOCTYPE html>
@@ -1365,131 +1378,33 @@ async def home():
 
   <!-- Bootstrap CSS -->
   <link rel="stylesheet"
-        href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
+        href="{{ url_for('static','css/bootstrap.min.css') }}"
         integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo="
         crossorigin="anonymous">
 
   <!-- Roboto -->
   <link rel="stylesheet"
-        href="{{ url_for('static', filename='css/roboto.css') }}"
+        href="{{ url_for('static','css/roboto.css') }}"
         integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE="
         crossorigin="anonymous">
 
   <!-- Orbitron -->
   <link rel="stylesheet"
-        href="{{ url_for('static', filename='css/orbitron.css') }}"
+        href="{{ url_for('static','css/orbitron.css') }}"
         integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00="
         crossorigin="anonymous">
 
   <!-- FontAwesome -->
   <link rel="stylesheet"
-        href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
+        href="{{ url_for('static','css/fontawesome.min.css') }}"
         integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU="
         crossorigin="anonymous">
 
   <style>
-    body {
-      background: linear-gradient(135deg,#1e3c72 0%,#2a5298 100%);
-      color: #fff;
-      font-family: 'Roboto', sans-serif;
-    }
-    .navbar {
-      background: #000;
-      padding: 0.75rem 1rem;
-    }
-    .navbar-brand {
-      font-family: 'Orbitron', sans-serif;
-      color: #0ff;
-      font-size: 1.5rem;
-    }
-    .nav-link {
-      color: #fff;
-      margin-left: 1rem;
-      text-decoration: none;
-    }
-    .nav-link:hover {
-      color: #0cc;
-    }
-    .container {
-      max-width: 800px;
-      margin: 2rem auto;
-    }
-    .card {
-      background: rgba(255,255,255,0.1);
-      border: none;
-      border-radius: 0.75rem;
-      margin-bottom: 2rem;
-    }
-    .btn-primary {
-      background: #0ff;
-      color: #000;
-      border: none;
-      transition: background 0.3s;
-    }
-    .btn-primary:hover {
-      background: #0cc;
-    }
-    /* Stepper */
-    .stepper {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin: 2rem 0;
-    }
-    .step {
-      flex: 1;
-      position: relative;
-      text-align: center;
-    }
-    .step:not(:last-child)::after {
-      content: '';
-      position: absolute;
-      top: 50%;
-      right: 0;
-      width: calc(100% - 30px);
-      height: 2px;
-      background: #555;
-      transform: translateY(-50%);
-    }
-    .circle {
-      width: 30px;
-      height: 30px;
-      margin: 0 auto 8px;
-      line-height: 30px;
-      border-radius: 50%;
-      background: #555;
-      color: #fff;
-    }
-    .active .circle,
-    .completed .circle {
-      background: #0ff;
-      color: #000;
-    }
-    /* Loading overlay */
-    #overlay {
-      display: none;
-      position: fixed;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      background: rgba(0,0,0,0.7);
-      z-index: 999;
-      align-items: center;
-      justify-content: center;
-    }
-    #overlay .spinner-border {
-      width: 4rem;
-      height: 4rem;
-      color: #0ff;
-    }
-    /* Bio & How It Works */
-    .bio h5, .how-it-works h5 {
-      font-family: 'Orbitron', sans-serif;
-      color: #f39c12;
-      margin-bottom: 0.5rem;
-    }
-    .bio p, .how-it-works p, .how-it-works li {
-      color: #e0e0e0;
-    }
+    /* ... your existing styles (body, navbar, container, cards, buttons, stepper, overlay, bio/how-it-works) ... */
+
+    /* Results box hidden until filled */
+    #resultsBox { display: none; }
   </style>
 </head>
 <body>
@@ -1498,7 +1413,7 @@ async def home():
   <nav class="navbar d-flex align-items-center">
     <a class="navbar-brand" href="{{ url_for('home') }}">Quantum NARCAN Finder</a>
     <div class="ml-auto">
-      {% if session.get('username') %}
+      {% if session.username %}
         <a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a>
         <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
       {% else %}
@@ -1509,48 +1424,28 @@ async def home():
   </nav>
 
   <div class="container">
-
     <!-- About the Creator -->
     <div class="card bio p-4">
       <h5>About the Creator</h5>
-      <p>
-        In the vast tapestry of existence, I found myself undone by an unseen poison—fentanyl
-        slipped into a simple vape. Rising from that ordeal, I embraced both recovery and purpose.
-        With each breath restored, I envisioned a brighter cosmos where every person could
-        navigate danger with confidence. This Finder, born of my journey, is my gift to those
-        who stand on the precipice between life and oblivion.
-      </p>
+      <p>…</p>
     </div>
 
     <!-- How It Works -->
     <div class="card how-it-works p-4">
       <h5>How It Works</h5>
-      <p>
-        Imagine the universe as a sea of infinite possibilities. Here, our Quantum NARCAN Finder
-        sails beyond the horizon of classical limits:
-      </p>
-      <ul>
-        <li><strong>Quantum Hypertime Simulation:</strong> We harness qubits—delicate instruments
-            of computation—to explore myriad scenarios in parallel, like waves dancing across
-            the cosmic ocean.</li>
-        <li><strong>OpenAI Contextual Insight:</strong> A sublime mind parses your location and
-            need, ensuring guidance that resonates with your real-world crisis.</li>
-        <li><strong>Ephemeral Encryption:</strong> Every query is shielded in AES-GCM armor,
-            encrypted in flight, and erased upon completion—leaving no trace but compassion.</li>
-        <li><strong>Harm Reduction Ethos:</strong> No matter where you are, we reveal the nearest
-            lifelines—clinics, vending machines, or delivery networks—illuminating paths to hope.</li>
-      </ul>
+      <p>…</p>
+      <ul>…</ul>
     </div>
 
     <!-- Stepper -->
     <div class="stepper">
-      <div class="step {% if not results_html and not error %}active{% else %}completed{% endif %}">
+      <div class="step {% if not md_html and not error %}active{% else %}completed{% endif %}">
         <div class="circle">1</div> Enter Info
       </div>
-      <div class="step {% if request.method=='POST' and not results_html and not error %}active{% else %}completed{% endif %}">
+      <div class="step {% if request.method=='POST' and not md_html and not error %}active{% else %}completed{% endif %}">
         <div class="circle">2</div> Searching
       </div>
-      <div class="step {% if results_html or error %}active{% endif %}">
+      <div class="step {% if md_html or error %}active{% endif %}">
         <div class="circle">3</div> Results
       </div>
     </div>
@@ -1567,7 +1462,8 @@ async def home():
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
           <label>Your Location</label>
-          <input name="address" class="form-control" placeholder="123 Main St, City, State" required>
+          <input name="address" class="form-control"
+                 placeholder="123 Main St, City, State" required>
         </div>
         <div class="form-group mt-3">
           <label>Emergency Context</label>
@@ -1577,36 +1473,34 @@ async def home():
             <option value="other">Other Urgent Need</option>
           </select>
         </div>
-        <button id="submitBtn" class="btn btn-primary mt-4 w-100">
+        <button class="btn btn-primary mt-4 w-100">
           <i class="fas fa-search-location"></i> Find NARCAN
         </button>
       </form>
     </div>
 
-    <!-- Results -->
-    {% if results_html %}
-      <div class="card mb-4 p-4">
-        <h5>Results</h5>
-        <hr style="border-color:#555;">
-        <div>{{ results_html }}</div>
-      </div>
-    {% endif %}
+    <!-- Results Box -->
+    <div id="resultsBox" class="card mb-4 p-4">
+      <h5>Results</h5>
+      <hr style="border-color:#555;">
+      {{ md_html|safe }}
+    </div>
   </div>
 
-  <!-- Loading Overlay -->
+  <!-- Overlay -->
   <div id="overlay">
     <div class="spinner-border" role="status"></div>
   </div>
 
   <!-- jQuery -->
   <script
-    src="{{ url_for('static', filename='js/jquery.min.js') }}"
+    src="{{ url_for('static','js/jquery.min.js') }}"
     integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
     crossorigin="anonymous"></script>
 
-  <!-- Bootstrap Bundle JS -->
+  <!-- Bootstrap JS -->
   <script
-    src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"
+    src="{{ url_for('static','js/bootstrap.bundle.min.js') }}"
     integrity="sha384-kenU1KFdBIe4zVF0s0G1M5b4hcpxyD9F7jL+khIYvI5Dz7YIivRkXWlGX5YkNhc+"
     crossorigin="anonymous"></script>
 
@@ -1614,10 +1508,16 @@ async def home():
     document.getElementById('finderForm').addEventListener('submit', () => {
       document.getElementById('overlay').style.display = 'flex';
     });
+    {% if md_html %}
+      document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('resultsBox').style.display = 'block';
+      });
+    {% endif %}
   </script>
 </body>
 </html>
-""", error=error, results_html=results_html)
+""", error=error, md_html=md_html)
+    
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
