@@ -79,6 +79,31 @@ if not ADMIN_USERNAME or not ADMIN_PASS:
         "Set them in your environment before starting the app."
     )
 
+import re
+
+def validate_password_strength(password: str) -> bool:
+    """
+    Validates that a password is strong:
+    - At least 12 characters long
+    - Contains at least one uppercase letter
+    - Contains at least one lowercase letter
+    - Contains at least one digit
+    - Contains at least one special character
+    """
+    if not password or len(password) < 12:
+        return False
+
+    # Using regex for complexity rules
+    if not re.search(r"[A-Z]", password):
+        return False
+    if not re.search(r"[a-z]", password):
+        return False
+    if not re.search(r"[0-9]", password):
+        return False
+    if not re.search(r"[\W_]", password):
+        return False
+
+    return True
 def generate_very_strong_secret_key():
     base_key = secrets.token_bytes(24) 
     derived_key = hashlib.scrypt(
