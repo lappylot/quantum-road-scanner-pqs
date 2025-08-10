@@ -69,6 +69,16 @@ if not SECRET_KEY:
 if isinstance(SECRET_KEY, str):
     SECRET_KEY = SECRET_KEY.encode("utf-8")
 
+
+ADMIN_USERNAME = os.getenv("admin_username")
+ADMIN_PASS = os.getenv("admin_pass")
+
+if not ADMIN_USERNAME or not ADMIN_PASS:
+    raise ValueError(
+        "admin_username and/or admin_pass environment variables are not defined! "
+        "Set them in your environment before starting the app."
+    )
+
 def generate_very_strong_secret_key():
     base_key = secrets.token_bytes(24) 
     derived_key = hashlib.scrypt(
