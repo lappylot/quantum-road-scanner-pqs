@@ -326,8 +326,91 @@ def create_tables():
 
     print("Database tables created and verified successfully.")
 
-create_tables()
 
+
+def ensure_admin_from_env():
+    """
+    Create/update the admin user from env:
+      - admin_username
+      - admin_pass
+    If either is missing, do nothing (the startup gate will decide whether to exit).
+    """
+    admin_user = os.getenv("admin_username")
+    admin_pass = os.getenv("admin_pass")
+
+    if not admin_user or not admin_pass:
+        logger.info("Env admin credentials not fully provided; skipping seeding.")
+        return
+
+    # Enforce strong admin password; abort startup if weak
+    if not validate_password_strength(admin_pass):
+        logger.critical("admin_pass does not meet strength requirements.")
+        import sys; sys.exit("FATAL: Weak admin_pass.")
+
+    hashed = ph.hash(admin_pass)
+    preferred_model_encrypted = encrypt_data('openai')
+
+    with sqlite3.connect(DB_FILE) as db:
+        cursor = db.cursor()
+        cursor.execute("SELECT id, password, is_admin FROM users WHERE username = ?", (admin_user,))
+        row = cursor.fetchone()
+
+        if row:
+            user_id, stored_hash, is_admin = row
+            need_pw_update = False
+            try:
+                ph.verify(stored_hash, admin_pass)
+                if ph.check_needs_rehash(stored_hash):
+                    stored_hash = ph.hash(admin_pass)
+                    need_pw_update = True
+            except VerifyMismatchError:
+                stored_hash = hashed
+                need_pw_update = True
+
+            if not is_admin:
+                cursor.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (user_id,))
+            if need_pw_update:
+                cursor.execute("UPDATE users SET password = ? WHERE id = ?", (stored_hash, user_id))
+            db.commit()
+            logger.info("Admin user ensured/updated from env.")
+        else:
+            cursor.execute(
+                "INSERT INTO users (username, password, is_admin, preferred_model) VALUES (?, ?, 1, ?)",
+                (admin_user, hashed, preferred_model_encrypted)
+            )
+            db.commit()
+            logger.info("Admin user created from env.")
+
+def enforce_admin_presence():
+    """
+    Abort startup unless at least one admin exists.
+    If none exists, try to create from env; if still none, exit.
+    """
+    with sqlite3.connect(DB_FILE) as db:
+        cursor = db.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1")
+        admins = cursor.fetchone()[0]
+
+    if admins > 0:
+        logger.info("Admin presence verified.")
+        return
+
+    # Try seeding from env once
+    ensure_admin_from_env()
+
+    with sqlite3.connect(DB_FILE) as db:
+        cursor = db.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1")
+        admins = cursor.fetchone()[0]
+
+    if admins == 0:
+        logger.critical(
+            "No admin exists and env admin credentials not provided/valid. Halting."
+        )
+        import sys; sys.exit("FATAL: No admin account present.")
+create_tables()
+ensure_admin_from_env()     # try to seed if env is set
+enforce_admin_presence()    # hard fail if no admin exists
 def is_registration_enabled():
     with config_lock:
         with sqlite3.connect(DB_FILE) as db:
@@ -764,7 +847,6 @@ def validate_password_strength(password):
     return True
 
 def register_user(username, password, invite_code=None):
-
     username = sanitize_input(username)
     password = sanitize_input(password)
 
@@ -772,8 +854,15 @@ def register_user(username, password, invite_code=None):
         logger.warning(f"User '{username}' provided a weak password.")
         return False, "Bad password, please use a stronger one."
 
-    registration_enabled = is_registration_enabled()
+    # Hard stop for safety if admin somehow missing at runtime
+    with sqlite3.connect(DB_FILE) as _db:
+        _cur = _db.cursor()
+        _cur.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1")
+        if _cur.fetchone()[0] == 0:
+            logger.critical("Registration blocked: no admin present.")
+            return False, "Registration disabled until an admin is provisioned."
 
+    registration_enabled = is_registration_enabled()
     if not registration_enabled:
         if not invite_code:
             logger.warning(f"User '{username}' attempted registration without an invite code.")
@@ -787,7 +876,6 @@ def register_user(username, password, invite_code=None):
 
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
-
         try:
             db.execute("BEGIN")
 
@@ -808,21 +896,11 @@ def register_user(username, password, invite_code=None):
                     logger.warning(f"User '{username}' attempted to reuse invite code ID {row[0]}.")
                     db.rollback()
                     return False, "Invite code has already been used."
-
                 cursor.execute("UPDATE invite_codes SET is_used = 1 WHERE id = ?", (row[0],))
                 logger.info(f"Invite code ID {row[0]} used by user '{username}'.")
 
-            cursor.execute("SELECT COUNT(*) FROM users")
-            user_count = cursor.fetchone()[0]
-
-            if user_count == 0:
-                is_admin = 1
-                session['is_admin'] = True
-                logger.info(f"User '{username}' is the first user and is set as admin.")
-            else:
-                is_admin = 0
-                session['is_admin'] = False
-                logger.info(f"User '{username}' is a regular user.")
+            # Always regular user
+            is_admin = 0
 
             cursor.execute(
                 "INSERT INTO users (username, password, is_admin, preferred_model) VALUES (?, ?, ?, ?)",
@@ -844,12 +922,11 @@ def register_user(username, password, invite_code=None):
 
     session.clear()
     session['username'] = username
-    session['is_admin'] = is_admin == 1
+    session['is_admin'] = False
     session.modified = True
     logger.debug(f"Session updated for user '{username}'. Admin status: {session['is_admin']}.")
 
     return True, "Registration successful."
-
 def check_rate_limit(user_id):
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
