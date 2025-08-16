@@ -3,10 +3,8 @@ import httpx
 import backoff
 import sqlite3
 import psutil
-from flask import (
-    Flask, render_template_string, request, redirect, url_for,
-    session, jsonify, flash, send_from_directory, abort
-)
+from flask import (Flask, render_template_string, request, redirect, url_for,
+                   session, jsonify, flash, send_from_directory, abort)
 from flask_wtf import FlaskForm, CSRFProtect
 from flask_wtf.csrf import generate_csrf
 from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
@@ -48,6 +46,14 @@ import os
 from statistics import mean
 import json
 import string
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.hashes import SHA3_512
+from argon2.low_level import hash_secret_raw, Type as ArgonType
+from numpy.random import Generator, PCG64DXSM
+import itertools
+import os
+import itertools
+import numpy as np
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -55,7 +61,8 @@ logger.setLevel(logging.INFO)
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(logging.INFO)
 
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
 
 logger.addHandler(console_handler)
@@ -64,11 +71,23 @@ app = Flask(__name__)
 
 SECRET_KEY = os.getenv("INVITE_CODE_SECRET_KEY")
 if not SECRET_KEY:
-    raise ValueError("SECRET_KEY environment variable is not defined!")
+    raise ValueError(
+        "INVITE_CODE_SECRET_KEY environment variable is not defined!")
 
 if isinstance(SECRET_KEY, str):
     SECRET_KEY = SECRET_KEY.encode("utf-8")
 
+_entropy_state = {
+    "wheel":
+    itertools.cycle([
+        b'\xff\x20\x33', b'\x22\xaa\xff', b'\x00\xee\x44', b'\xf4\x44\x00',
+        b'\x11\x99\xff', b'\xad\x11\xec'
+    ]),
+    "rng":
+    np.random.Generator(
+        np.random.PCG64DXSM(
+            [int.from_bytes(os.urandom(4), 'big') for _ in range(8)]))
+}
 
 ADMIN_USERNAME = os.getenv("admin_username")
 ADMIN_PASS = os.getenv("admin_pass")
@@ -76,24 +95,29 @@ ADMIN_PASS = os.getenv("admin_pass")
 if not ADMIN_USERNAME or not ADMIN_PASS:
     raise ValueError(
         "admin_username and/or admin_pass environment variables are not defined! "
-        "Set them in your environment before starting the app."
-    )
+        "Set them in your environment before starting the app.")
 
-import re
+
+def _chaotic_three_fry_mix(buf: bytes) -> bytes:
+    import struct
+    words = list(
+        struct.unpack('>4Q',
+                      hashlib.blake2b(buf, digest_size=32).digest()))
+    for i in range(2):
+        words[0] = (words[0] + words[1]) & 0xffffffffffffffff
+        words[1] = ((words[1] << 13) | (words[1] >> 51)) & 0xffffffffffffffff
+        words[1] ^= words[0]
+        words[2] = (words[2] + words[3]) & 0xffffffffffffffff
+        words[3] = ((words[3] << 16) | (words[3] >> 48)) & 0xffffffffffffffff
+        words[3] ^= words[2]
+    return struct.pack('>4Q', *words)
+
 
 def validate_password_strength(password: str) -> bool:
-    """
-    Validates that a password is strong:
-    - At least 12 characters long
-    - Contains at least one uppercase letter
-    - Contains at least one lowercase letter
-    - Contains at least one digit
-    - Contains at least one special character
-    """
+
     if not password or len(password) < 12:
         return False
 
-    # Using regex for complexity rules
     if not re.search(r"[A-Z]", password):
         return False
     if not re.search(r"[a-z]", password):
@@ -104,30 +128,78 @@ def validate_password_strength(password: str) -> bool:
         return False
 
     return True
+
+
 def generate_very_strong_secret_key():
-    base_key = secrets.token_bytes(24) 
-    derived_key = hashlib.scrypt(
-        password=base_key,
-        salt=secrets.token_bytes(16), 
-        n=16384, 
-        r=4,     
-        p=1,     
-        dklen=32
-    )
-    return derived_key
+
+    global _entropy_state
+
+    import os, secrets, uuid, psutil, time, threading, hashlib, numpy as np
+
+    E = [
+        os.urandom(64),
+        secrets.token_bytes(48),
+        uuid.uuid4().bytes,
+        f"{psutil.cpu_percent()}|{psutil.virtual_memory().percent}".encode(),
+        str((time.time_ns(), time.perf_counter_ns())).encode(),
+        f"{os.getpid()}:{os.getppid()}:{threading.get_ident()}".encode(),
+        next(_entropy_state["wheel"]),
+    ]
+
+    base = hashlib.blake2b(b"||".join(E), digest_size=64).digest()
+    chaotic = _chaotic_three_fry_mix(base)
+
+    rounds = int(_entropy_state["rng"].integers(1, 5))
+    for _ in range(4 + rounds):
+        chaotic = hashlib.shake_256(chaotic).digest(64)
+        chaotic = _chaotic_three_fry_mix(chaotic)
+
+    raw = hash_secret_raw(chaotic,
+                          os.urandom(16),
+                          time_cost=4,
+                          memory_cost=256000,
+                          parallelism=2,
+                          hash_len=48,
+                          type=ArgonType.ID)
+
+    hkdf = HKDF(algorithm=SHA3_512(),
+                length=32,
+                salt=os.urandom(32),
+                info=b"QRS|rotating-session-key|v4",
+                backend=default_backend())
+    final_key = hkdf.derive(raw)
+
+    lhs = int.from_bytes(final_key[:16], 'big')
+    rhs = int(_entropy_state["rng"].integers(0, 1 << 63))
+    seed64 = (lhs ^ rhs) & ((1 << 64) - 1)
+
+    seed_list = [(seed64 >> 32) & 0xffffffff, seed64 & 0xffffffff]
+    _entropy_state["rng"] = Generator(PCG64DXSM(seed_list))
+
+    return final_key
+
 
 def get_very_complex_random_interval():
-    base_interval = secrets.choice(range(15, 25)) 
-    additional_randomness = secrets.randbelow(600)  
-    return (base_interval * 60) + additional_randomness
+
+    c = psutil.cpu_percent()
+    r = psutil.virtual_memory().percent
+    cw = int.from_bytes(next(_entropy_state["wheel"]), 'big')
+    rng = _entropy_state["rng"].integers(7, 15)
+    base = (9 * 60) + secrets.randbelow(51 * 60)
+    jitter = int((c * r * 13 + cw * 7 + rng) % 311)
+    return base + jitter
+
 
 def rotate_secret_key():
     lock = threading.Lock()
     while True:
         with lock:
-            app.secret_key = generate_very_strong_secret_key()
-            logger.info("Secret key rotated securely.")
+            sk = generate_very_strong_secret_key()
+            app.secret_key = sk
+            fp = base64.b16encode(sk[:6]).decode()
+            logger.info(f"Secret key rotated (fp={fp})")
         time.sleep(get_very_complex_random_interval())
+
 
 BASE_DIR = Path(__file__).parent.resolve()
 
@@ -141,32 +213,33 @@ config_lock = threading.Lock()
 DB_FILE = BASE_DIR / 'secure_data.db'
 EXPIRATION_HOURS = 65
 
-app.config.update(
-    SESSION_COOKIE_SECURE=True,
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Strict',
-    WTF_CSRF_TIME_LIMIT=3600,
-    SECRET_KEY=SECRET_KEY
-)
+app.config.update(SESSION_COOKIE_SECURE=True,
+                  SESSION_COOKIE_HTTPONLY=True,
+                  SESSION_COOKIE_SAMESITE='Strict',
+                  WTF_CSRF_TIME_LIMIT=3600,
+                  SECRET_KEY=SECRET_KEY)
 
 csrf = CSRFProtect(app)
 
+
 @app.after_request
 def apply_csp(response):
-    csp_policy = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "font-src 'self' data:; "
-        "img-src 'self' data:; "
-        "object-src 'none'; "
-        "base-uri 'self'; "
-    )
+    csp_policy = ("default-src 'self'; "
+                  "script-src 'self' 'unsafe-inline'; "
+                  "style-src 'self' 'unsafe-inline'; "
+                  "font-src 'self' data:; "
+                  "img-src 'self' data:; "
+                  "object-src 'none'; "
+                  "base-uri 'self'; ")
     response.headers['Content-Security-Policy'] = csp_policy
     return response
 
+
 class KeyManager:
-    def __init__(self, passphrase_env_var='ENCRYPTION_PASSPHRASE', salt_file_path='/home/appuser/.keys/encryption_salt_key.key'):
+
+    def __init__(self,
+                 passphrase_env_var='ENCRYPTION_PASSPHRASE',
+                 salt_file_path='./encryption_salt_key.key'):
         self.encryption_key = None
         self.passphrase_env_var = passphrase_env_var
         self.salt_file_path = Path(salt_file_path)
@@ -179,35 +252,36 @@ class KeyManager:
 
         passphrase = os.getenv(self.passphrase_env_var)
         if not passphrase:
-            logger.critical(f"The environment variable {self.passphrase_env_var} is not set.")
-            raise ValueError(f"No {self.passphrase_env_var} environment variable set")
-
+            logger.critical(
+                f"The environment variable {self.passphrase_env_var} is not set."
+            )
+            raise ValueError(
+                f"No {self.passphrase_env_var} environment variable set")
 
         salt_dir = self.salt_file_path.parent
         salt_dir.mkdir(parents=True, exist_ok=True)
         salt_dir.chmod(0o700)
-
 
         if self.salt_file_path.exists():
             logger.info(f"Salt file found at {self.salt_file_path}")
             with self.salt_file_path.open('rb') as salt_file:
                 salt = salt_file.read()
         else:
-            logger.info(f"Salt file not found, creating a new one at {self.salt_file_path}")
+            logger.info(
+                f"Salt file not found, creating a new one at {self.salt_file_path}"
+            )
             salt = secrets.token_bytes(16)
             with self.salt_file_path.open('wb') as salt_file:
                 salt_file.write(salt)
             self.salt_file_path.chmod(0o600)
 
         try:
-            kdf = Scrypt(
-                salt=salt,
-                length=32,
-                n=65536,
-                r=8,
-                p=1,
-                backend=self.backend
-            )
+            kdf = Scrypt(salt=salt,
+                         length=32,
+                         n=65536,
+                         r=8,
+                         p=1,
+                         backend=self.backend)
             self.encryption_key = kdf.derive(passphrase.encode())
             logger.info("Encryption key successfully derived.")
         except Exception as e:
@@ -220,8 +294,10 @@ class KeyManager:
             raise ValueError("Encryption key is not initialized.")
         return self.encryption_key
 
+
 key_manager = KeyManager()
 encryption_key = key_manager.get_key()
+
 
 def encrypt_data(data):
     try:
@@ -238,6 +314,7 @@ def encrypt_data(data):
     except Exception as e:
         logger.error(f"Encryption failed: {e}", exc_info=True)
         return None
+
 
 def decrypt_data(encrypted_data_b64):
     try:
@@ -257,20 +334,12 @@ def decrypt_data(encrypted_data_b64):
         logger.error(f"Decryption failed: {e}", exc_info=True)
         return None
 
-argon2_parameters = {
-    'time_cost': 3,
-    'memory_cost': 65536,
-    'parallelism': 2,
-    'hash_len': 32,
-    'salt_len': 16,
-    'type': Type.ID
-}
 
-ph = PasswordHasher(**argon2_parameters)
 
 dev = qml.device("default.qubit", wires=5)
 
 registration_enabled = True
+
 
 def create_tables():
     if not DB_FILE.exists():
@@ -316,9 +385,11 @@ def create_tables():
             )
         """)
 
-        cursor.execute("SELECT value FROM config WHERE key = 'registration_enabled'")
+        cursor.execute(
+            "SELECT value FROM config WHERE key = 'registration_enabled'")
         if not cursor.fetchone():
-            cursor.execute("INSERT INTO config (key, value) VALUES (?, ?)", ('registration_enabled', '1')) 
+            cursor.execute("INSERT INTO config (key, value) VALUES (?, ?)",
+                           ('registration_enabled', '1'))
 
         cursor.execute("PRAGMA table_info(hazard_reports)")
         existing_columns = {info[1] for info in cursor.fetchall()}
@@ -329,7 +400,8 @@ def create_tables():
         ]
         for column in required_columns:
             if column not in existing_columns:
-                cursor.execute(f"ALTER TABLE hazard_reports ADD COLUMN {column} TEXT")
+                cursor.execute(
+                    f"ALTER TABLE hazard_reports ADD COLUMN {column} TEXT")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS rate_limits (
@@ -362,65 +434,107 @@ def create_tables():
     print("Database tables created and verified successfully.")
 
 
+def _dynamic_argon2_hasher():
+
+    try:
+        cpu, ram = get_cpu_ram_usage()
+    except Exception:
+        cpu, ram = 0.0, 0.0
+
+    now_ns = time.time_ns()
+    seed_material = b"|".join([
+        os.urandom(32),
+        int(cpu * 100).to_bytes(2, "big", signed=False),
+        int(ram * 100).to_bytes(2, "big", signed=False),
+        now_ns.to_bytes(8, "big", signed=False),
+        f"{os.getpid()}:{os.getppid()}:{threading.get_ident()}".encode(),
+        uuid.uuid4().bytes,
+        secrets.token_bytes(16),
+    ])
+    seed = hashlib.blake2b(seed_material, digest_size=16).digest()
+
+    mem_min = 64 * 1024
+    mem_max = 256 * 1024
+    spread = mem_max - mem_min
+    mem_kib = mem_min + (int.from_bytes(seed[:4], "big") % spread)
+
+    time_cost = 2 + (seed[4] % 3)
+
+    cpu_count = os.cpu_count() or 2
+    parallelism = max(2, min(4, cpu_count // 2))
+
+    return PasswordHasher(
+        time_cost=time_cost,
+        memory_cost=mem_kib,
+        parallelism=parallelism,
+        hash_len=32,
+        salt_len=16,
+        type=Type.ID,
+    )
+
+dyn_hasher = _dynamic_argon2_hasher()
+
+ph = dyn_hasher
 
 def ensure_admin_from_env():
-    """
-    Create/update the admin user from env:
-      - admin_username
-      - admin_pass
-    If either is missing, do nothing (the startup gate will decide whether to exit).
-    """
+
     admin_user = os.getenv("admin_username")
     admin_pass = os.getenv("admin_pass")
 
     if not admin_user or not admin_pass:
-        logger.info("Env admin credentials not fully provided; skipping seeding.")
+        logger.info(
+            "Env admin credentials not fully provided; skipping seeding.")
         return
 
-    # Enforce strong admin password; abort startup if weak
     if not validate_password_strength(admin_pass):
         logger.critical("admin_pass does not meet strength requirements.")
-        import sys; sys.exit("FATAL: Weak admin_pass.")
+        import sys
+        sys.exit("FATAL: Weak admin_pass.")
 
-    hashed = ph.hash(admin_pass)
+    dyn_hasher = _dynamic_argon2_hasher()
+    hashed = dyn_hasher.hash(admin_pass)
     preferred_model_encrypted = encrypt_data('openai')
 
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
-        cursor.execute("SELECT id, password, is_admin FROM users WHERE username = ?", (admin_user,))
+        cursor.execute(
+            "SELECT id, password, is_admin FROM users WHERE username = ?",
+            (admin_user, ))
         row = cursor.fetchone()
 
         if row:
             user_id, stored_hash, is_admin = row
             need_pw_update = False
             try:
-                ph.verify(stored_hash, admin_pass)
-                if ph.check_needs_rehash(stored_hash):
-                    stored_hash = ph.hash(admin_pass)
+
+                dyn_hasher.verify(stored_hash, admin_pass)
+
+                if dyn_hasher.check_needs_rehash(stored_hash):
+                    stored_hash = dyn_hasher.hash(admin_pass)
                     need_pw_update = True
             except VerifyMismatchError:
-                stored_hash = hashed
+                stored_hash = dyn_hasher.hash(admin_pass)
                 need_pw_update = True
 
             if not is_admin:
-                cursor.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (user_id,))
+                cursor.execute("UPDATE users SET is_admin = 1 WHERE id = ?",
+                               (user_id, ))
             if need_pw_update:
-                cursor.execute("UPDATE users SET password = ? WHERE id = ?", (stored_hash, user_id))
+                cursor.execute("UPDATE users SET password = ? WHERE id = ?",
+                               (stored_hash, user_id))
             db.commit()
-            logger.info("Admin user ensured/updated from env.")
+            logger.info(
+                "Admin user ensured/updated from env (dynamic Argon2id).")
         else:
             cursor.execute(
                 "INSERT INTO users (username, password, is_admin, preferred_model) VALUES (?, ?, 1, ?)",
-                (admin_user, hashed, preferred_model_encrypted)
-            )
+                (admin_user, hashed, preferred_model_encrypted))
             db.commit()
-            logger.info("Admin user created from env.")
+            logger.info("Admin user created from env (dynamic Argon2id).")
+
 
 def enforce_admin_presence():
-    """
-    Abort startup unless at least one admin exists.
-    If none exists, try to create from env; if still none, exit.
-    """
+
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
         cursor.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1")
@@ -430,7 +544,6 @@ def enforce_admin_presence():
         logger.info("Admin presence verified.")
         return
 
-    # Try seeding from env once
     ensure_admin_from_env()
 
     with sqlite3.connect(DB_FILE) as db:
@@ -442,28 +555,38 @@ def enforce_admin_presence():
         logger.critical(
             "No admin exists and env admin credentials not provided/valid. Halting."
         )
-        import sys; sys.exit("FATAL: No admin account present.")
+        import sys
+        sys.exit("FATAL: No admin account present.")
+
+
 create_tables()
-ensure_admin_from_env()     # try to seed if env is set
-enforce_admin_presence()    # hard fail if no admin exists
+ensure_admin_from_env()
+enforce_admin_presence()
+
+
 def is_registration_enabled():
     with config_lock:
         with sqlite3.connect(DB_FILE) as db:
             cursor = db.cursor()
-            cursor.execute("SELECT value FROM config WHERE key = 'registration_enabled'")
+            cursor.execute(
+                "SELECT value FROM config WHERE key = 'registration_enabled'")
             row = cursor.fetchone()
             enabled = row and row[0] == '1'
             logger.debug(f"Registration enabled: {enabled}")
             return enabled
 
+
 def set_registration_enabled(enabled: bool, admin_user_id: int):
     with config_lock:
         with sqlite3.connect(DB_FILE) as db:
             cursor = db.cursor()
-            cursor.execute("REPLACE INTO config (key, value) VALUES (?, ?)", 
+            cursor.execute("REPLACE INTO config (key, value) VALUES (?, ?)",
                            ('registration_enabled', '1' if enabled else '0'))
             db.commit()
-            logger.info(f"Admin user_id {admin_user_id} set registration_enabled to {enabled}.")
+            logger.info(
+                f"Admin user_id {admin_user_id} set registration_enabled to {enabled}."
+            )
+
 
 def create_database_connection():
 
@@ -471,20 +594,33 @@ def create_database_connection():
     db_connection.execute("PRAGMA journal_mode=WAL;")
     return db_connection
 
+
 def collect_entropy(sources=None) -> int:
     if sources is None:
         sources = {
-            "os_random": lambda: int.from_bytes(secrets.token_bytes(32), 'big'),
-            "system_metrics": lambda: int(hashlib.sha512(
-                f"{os.getpid()}{os.getppid()}{time.time_ns()}".encode()
-            ).hexdigest(), 16),
-            "hardware_random": lambda: int.from_bytes(os.urandom(32), 'big') ^ secrets.randbits(256),
+            "os_random":
+            lambda: int.from_bytes(secrets.token_bytes(32), 'big'),
+            "system_metrics":
+            lambda: int(
+                hashlib.sha512(f"{os.getpid()}{os.getppid()}{time.time_ns()}".
+                               encode()).hexdigest(), 16),
+            "hardware_random":
+            lambda: int.from_bytes(os.urandom(32), 'big') ^ secrets.randbits(
+                256),
         }
     entropy_pool = [source() for source in sources.values()]
-    combined_entropy = hashlib.sha512("".join(map(str, entropy_pool)).encode()).digest()
+    combined_entropy = hashlib.sha512("".join(map(
+        str, entropy_pool)).encode()).digest()
     return int.from_bytes(combined_entropy, 'big') % 2**512
 
-def secure_overwrite(cursor, table_name, columns, condition, condition_params=None, passes=7):
+
+def secure_overwrite(cursor,
+                     table_name,
+                     columns,
+                     condition,
+                     condition_params=None,
+                     passes=7):
+
     def is_valid_identifier(identifier):
         return re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', identifier) is not None
 
@@ -496,23 +632,26 @@ def secure_overwrite(cursor, table_name, columns, condition, condition_params=No
             if not is_valid_identifier(col):
                 raise ValueError(f"Invalid column name: {col}")
 
-        logger.info(f"Starting secure overwrite for table '{table_name}' with {passes} passes.")
+        logger.info(
+            f"Starting secure overwrite for table '{table_name}' with {passes} passes."
+        )
 
         charset = string.ascii_letters + string.digits + string.punctuation
 
         patterns = [
             lambda: ''.join(secrets.choice(charset) for _ in range(64)),
-            lambda: '0' * 64,                                         
-            lambda: '1' * 64,                                       
-            lambda: ''.join(secrets.choice(charset) for _ in range(64)),  
-            lambda: 'X' * 64,                                        
-            lambda: 'Y' * 64,                                         
-            lambda: ''.join(secrets.choice(charset) for _ in range(64)) 
+            lambda: '0' * 64, lambda: '1' * 64,
+            lambda: ''.join(secrets.choice(charset) for _ in range(64)),
+            lambda: 'X' * 64, lambda: 'Y' * 64,
+            lambda: ''.join(secrets.choice(charset) for _ in range(64))
         ]
 
         if passes > len(patterns):
-            logger.warning(f"Requested {passes} passes exceeds available patterns. Repeating patterns.")
-            patterns = patterns * (passes // len(patterns)) + patterns[:passes % len(patterns)]
+            logger.warning(
+                f"Requested {passes} passes exceeds available patterns. Repeating patterns."
+            )
+            patterns = patterns * (
+                passes // len(patterns)) + patterns[:passes % len(patterns)]
         else:
             patterns = patterns[:passes]
 
@@ -525,7 +664,9 @@ def secure_overwrite(cursor, table_name, columns, condition, condition_params=No
                 col_type_upper = col_type.upper()
                 if col_type_upper in ["TEXT", "CHAR", "VARCHAR", "CLOB"]:
                     overwrite_values[col] = pattern_func()
-                elif col_type_upper in ["INTEGER", "INT", "BIGINT", "SMALLINT", "TINYINT"]:
+                elif col_type_upper in [
+                        "INTEGER", "INT", "BIGINT", "SMALLINT", "TINYINT"
+                ]:
                     overwrite_values[col] = secrets.randbits(64) - (2**63)
                 elif col_type_upper in ["REAL", "DOUBLE", "FLOAT"]:
                     overwrite_values[col] = secrets.randbits(64) / (2**64)
@@ -536,7 +677,10 @@ def secure_overwrite(cursor, table_name, columns, condition, condition_params=No
                 else:
                     overwrite_values[col] = pattern_func()
 
-            set_clause = ', '.join([f"{quoted_columns[col]} = ?" for col in overwrite_values.keys()])
+            set_clause = ', '.join([
+                f"{quoted_columns[col]} = ?"
+                for col in overwrite_values.keys()
+            ])
             query = f"UPDATE {quoted_table} SET {set_clause} WHERE {condition}"
             params = list(overwrite_values.values())
             if condition_params:
@@ -545,34 +689,44 @@ def secure_overwrite(cursor, table_name, columns, condition, condition_params=No
             cursor.execute(query, params)
             logger.debug(f"Pass {pass_num} complete for table '{table_name}'.")
 
-        logger.info(f"Secure overwrite completed for table '{table_name}' with {passes} passes.")
+        logger.info(
+            f"Secure overwrite completed for table '{table_name}' with {passes} passes."
+        )
 
     except ValueError as ve:
-        logger.error(f"Validation error during secure overwrite for table '{table_name}': {ve}")
+        logger.error(
+            f"Validation error during secure overwrite for table '{table_name}': {ve}"
+        )
         raise RuntimeError("Invalid table or column name provided.")
     except sqlite3.Error as sqle:
-        logger.error(f"SQLite error during secure overwrite for table '{table_name}': {sqle}", exc_info=True)
+        logger.error(
+            f"SQLite error during secure overwrite for table '{table_name}': {sqle}",
+            exc_info=True)
         raise RuntimeError("Database error occurred during secure overwrite.")
     except Exception as e:
-        logger.error(f"Unexpected error during secure overwrite for table '{table_name}': {e}", exc_info=True)
-        raise RuntimeError("An unexpected error occurred during secure overwrite.")
+        logger.error(
+            f"Unexpected error during secure overwrite for table '{table_name}': {e}",
+            exc_info=True)
+        raise RuntimeError(
+            "An unexpected error occurred during secure overwrite.")
+
 
 def fetch_entropy_logs():
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
-        cursor.execute("SELECT encrypted_data, description, timestamp FROM entropy_logs ORDER BY id")
+        cursor.execute(
+            "SELECT encrypted_data, description, timestamp FROM entropy_logs ORDER BY id"
+        )
         logs = cursor.fetchall()
 
-    decrypted_logs = [
-        {
-            "encrypted_data": decrypt_data(row[0]),
-            "description": row[1],
-            "timestamp": row[2]
-        }
-        for row in logs
-    ]
+    decrypted_logs = [{
+        "encrypted_data": decrypt_data(row[0]),
+        "description": row[1],
+        "timestamp": row[2]
+    } for row in logs]
 
     return decrypted_logs
+
 
 def delete_expired_data():
     while True:
@@ -589,56 +743,65 @@ def delete_expired_data():
                 cursor.execute("PRAGMA table_info(hazard_reports)")
                 hazard_columns = {info[1] for info in cursor.fetchall()}
                 if all(col in hazard_columns for col in [
-                    "latitude", "longitude", "street_name", "vehicle_type",
-                    "destination", "result", "cpu_usage", "ram_usage",
-                    "quantum_results", "risk_level", "timestamp"
+                        "latitude", "longitude", "street_name", "vehicle_type",
+                        "destination", "result", "cpu_usage", "ram_usage",
+                        "quantum_results", "risk_level", "timestamp"
                 ]):
-                    cursor.execute("SELECT id FROM hazard_reports WHERE timestamp <= ?", (expiration_str,))
+                    cursor.execute(
+                        "SELECT id FROM hazard_reports WHERE timestamp <= ?",
+                        (expiration_str, ))
                     expired_hazard_ids = [row[0] for row in cursor.fetchall()]
 
-                    secure_overwrite(
-                        cursor,
-                        "hazard_reports",
-                        {
-                            "latitude": "TEXT",
-                            "longitude": "TEXT",
-                            "street_name": "TEXT",
-                            "vehicle_type": "TEXT",
-                            "destination": "TEXT",
-                            "result": "TEXT",
-                            "cpu_usage": "TEXT",
-                            "ram_usage": "TEXT",
-                            "quantum_results": "TEXT",
-                            "risk_level": "TEXT"
-                        },
-                        "timestamp <= ?",
-                        condition_params=[expiration_str]
+                    secure_overwrite(cursor,
+                                     "hazard_reports", {
+                                         "latitude": "TEXT",
+                                         "longitude": "TEXT",
+                                         "street_name": "TEXT",
+                                         "vehicle_type": "TEXT",
+                                         "destination": "TEXT",
+                                         "result": "TEXT",
+                                         "cpu_usage": "TEXT",
+                                         "ram_usage": "TEXT",
+                                         "quantum_results": "TEXT",
+                                         "risk_level": "TEXT"
+                                     },
+                                     "timestamp <= ?",
+                                     condition_params=[expiration_str])
+                    cursor.execute(
+                        "DELETE FROM hazard_reports WHERE timestamp <= ?",
+                        (expiration_str, ))
+                    logger.info(
+                        f"Deleted expired hazard_reports IDs: {expired_hazard_ids}"
                     )
-                    cursor.execute("DELETE FROM hazard_reports WHERE timestamp <= ?", (expiration_str,))
-                    logger.info(f"Deleted expired hazard_reports IDs: {expired_hazard_ids}")
                 else:
-                    logger.warning("Skipping hazard_reports: Missing required columns.")
+                    logger.warning(
+                        "Skipping hazard_reports: Missing required columns.")
 
                 cursor.execute("PRAGMA table_info(entropy_logs)")
                 entropy_columns = {info[1] for info in cursor.fetchall()}
-                if all(col in entropy_columns for col in ["id", "log", "pass_num", "timestamp"]):
-                    cursor.execute("SELECT id FROM entropy_logs WHERE timestamp <= ?", (expiration_str,))
+                if all(col in entropy_columns
+                       for col in ["id", "log", "pass_num", "timestamp"]):
+                    cursor.execute(
+                        "SELECT id FROM entropy_logs WHERE timestamp <= ?",
+                        (expiration_str, ))
                     expired_entropy_ids = [row[0] for row in cursor.fetchall()]
 
-                    secure_overwrite(
-                        cursor,
-                        "entropy_logs",
-                        {
-                            "log": "TEXT",
-                            "pass_num": "INTEGER"
-                        },
-                        "timestamp <= ?",
-                        condition_params=[expiration_str]
+                    secure_overwrite(cursor,
+                                     "entropy_logs", {
+                                         "log": "TEXT",
+                                         "pass_num": "INTEGER"
+                                     },
+                                     "timestamp <= ?",
+                                     condition_params=[expiration_str])
+                    cursor.execute(
+                        "DELETE FROM entropy_logs WHERE timestamp <= ?",
+                        (expiration_str, ))
+                    logger.info(
+                        f"Deleted expired entropy_logs IDs: {expired_entropy_ids}"
                     )
-                    cursor.execute("DELETE FROM entropy_logs WHERE timestamp <= ?", (expiration_str,))
-                    logger.info(f"Deleted expired entropy_logs IDs: {expired_entropy_ids}")
                 else:
-                    logger.warning("Skipping entropy_logs: Missing required columns.")
+                    logger.warning(
+                        "Skipping entropy_logs: Missing required columns.")
 
                 db.commit()
 
@@ -647,7 +810,9 @@ def delete_expired_data():
                     cursor = db.cursor()
                     for _ in range(3):
                         cursor.execute("VACUUM")
-                logger.info("Database triple VACUUM completed with sector randomization.")
+                logger.info(
+                    "Database triple VACUUM completed with sector randomization."
+                )
             except sqlite3.OperationalError as e:
                 logger.error(f"VACUUM failed: {e}", exc_info=True)
 
@@ -656,7 +821,8 @@ def delete_expired_data():
 
         interval = random.randint(5400, 10800)
         time.sleep(interval)
-        
+
+
 def delete_user_data(user_id):
     try:
         with sqlite3.connect(DB_FILE) as db:
@@ -664,9 +830,7 @@ def delete_user_data(user_id):
             db.execute("BEGIN")
 
             secure_overwrite(
-                cursor,
-                "hazard_reports",
-                {
+                cursor, "hazard_reports", {
                     "latitude": "TEXT",
                     "longitude": "TEXT",
                     "street_name": "TEXT",
@@ -677,33 +841,27 @@ def delete_user_data(user_id):
                     "ram_usage": "TEXT",
                     "quantum_results": "TEXT",
                     "risk_level": "TEXT"
-                },
-                f"user_id = {user_id}"
-            )
-            cursor.execute("DELETE FROM hazard_reports WHERE user_id = ?", (user_id,))
+                }, f"user_id = {user_id}")
+            cursor.execute("DELETE FROM hazard_reports WHERE user_id = ?",
+                           (user_id, ))
+
+            secure_overwrite(cursor, "rate_limits", {
+                "request_count": "INTEGER",
+                "last_request_time": "TEXT"
+            }, f"user_id = {user_id}")
+            cursor.execute("DELETE FROM rate_limits WHERE user_id = ?",
+                           (user_id, ))
 
             secure_overwrite(
                 cursor,
-                "rate_limits",
-                {
-                    "request_count": "INTEGER",
-                    "last_request_time": "TEXT"
-                },
-                f"user_id = {user_id}"
-            )
-            cursor.execute("DELETE FROM rate_limits WHERE user_id = ?", (user_id,))
-
-            secure_overwrite(
-                cursor,
-                "entropy_logs",
-                {
+                "entropy_logs", {
                     "pass_num": "INTEGER",
                     "log": "TEXT"
                 },
                 f"id IN (SELECT id FROM entropy_logs WHERE pass_num = ?)",
-                condition_params=[user_id]
-            )
-            cursor.execute("DELETE FROM entropy_logs WHERE pass_num = ?", (user_id,))
+                condition_params=[user_id])
+            cursor.execute("DELETE FROM entropy_logs WHERE pass_num = ?",
+                           (user_id, ))
 
             db.commit()
             logger.info(f"Securely deleted all data for user_id {user_id}")
@@ -715,18 +873,25 @@ def delete_user_data(user_id):
 
     except Exception as e:
         db.rollback()
-        logger.error(f"Failed to securely delete data for user_id {user_id}: {e}", exc_info=True)
+        logger.error(
+            f"Failed to securely delete data for user_id {user_id}: {e}",
+            exc_info=True)
 
-data_deletion_thread = threading.Thread(target=delete_expired_data, daemon=True)
+
+data_deletion_thread = threading.Thread(target=delete_expired_data,
+                                        daemon=True)
 data_deletion_thread.start()
+
 
 def sanitize_input(user_input):
     if not isinstance(user_input, str):
         user_input = str(user_input)
     return bleach.clean(user_input)
 
+
 gc = geonamescache.GeonamesCache()
 cities = gc.get_cities()
+
 
 def approximate_nearest_city(lat, lon, cities):
     nearest_city = None
@@ -743,11 +908,13 @@ def approximate_nearest_city(lat, lon, cities):
             continue
     return nearest_city, min_distance
 
+
 def approximate_country(lat, lon, cities):
     city, _ = approximate_nearest_city(lat, lon, cities)
     if city:
         return city.get('countrycode', 'UNKNOWN')
     return 'UNKNOWN'
+
 
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
     """
@@ -756,7 +923,9 @@ async def fetch_street_name_llm(lat: float, lon: float) -> str:
 
     openai_api_key = os.getenv("OPENAI_API_KEY")
     if not openai_api_key:
-        logger.error("OPENAI_API_KEY is missing. Falling back to local reverse_geocode.")
+        logger.error(
+            "OPENAI_API_KEY is missing. Falling back to local reverse_geocode."
+        )
         return reverse_geocode(lat, lon, cities)
 
     try:
@@ -768,8 +937,7 @@ async def fetch_street_name_llm(lat: float, lon: float) -> str:
             "Given coordinates, return \"City, County, State\" or \"Unknown Location\".[/action]\n"
             f"[coords]Latitude: {lat}, Longitude: {lon}[/coords]\n"
             f"[context]{ctx}[/context]\n"
-            "[format]City, County, State[/format]"
-        )
+            "[format]City, County, State[/format]")
 
         result = await run_openai_completion(prompt)
         if not result or "unknown" in result.lower():
@@ -783,6 +951,7 @@ async def fetch_street_name_llm(lat: float, lon: float) -> str:
         logger.error("OpenAI geocoding failed: %s", e, exc_info=True)
         return reverse_geocode(lat, lon, cities)
 
+
 def save_street_name_to_db(lat: float, lon: float, street_name: str):
     lat_encrypted = encrypt_data(str(lat))
     lon_encrypted = encrypt_data(str(lon))
@@ -790,7 +959,8 @@ def save_street_name_to_db(lat: float, lon: float, street_name: str):
     try:
         with sqlite3.connect(DB_FILE) as db:
             cursor = db.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT id
                 FROM hazard_reports
                 WHERE latitude=? AND longitude=?
@@ -798,14 +968,18 @@ def save_street_name_to_db(lat: float, lon: float, street_name: str):
             existing_record = cursor.fetchone()
 
             if existing_record:
-                cursor.execute("""
+                cursor.execute(
+                    """
                     UPDATE hazard_reports
                     SET street_name=?
                     WHERE id=?
                 """, (street_name_encrypted, existing_record[0]))
-                logger.info(f"Updated record {existing_record[0]} with street name {street_name}.")
+                logger.info(
+                    f"Updated record {existing_record[0]} with street name {street_name}."
+                )
             else:
-                cursor.execute("""
+                cursor.execute(
+                    """
                     INSERT INTO hazard_reports (latitude, longitude, street_name)
                     VALUES (?, ?, ?)
                 """, (lat_encrypted, lon_encrypted, street_name_encrypted))
@@ -817,23 +991,29 @@ def save_street_name_to_db(lat: float, lon: float, street_name: str):
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
 
+
 def quantum_tensor_earth_radius(lat):
     a = 6378.137821
     b = 6356.751904
     phi = math.radians(lat)
     term1 = (a**2 * np.cos(phi))**2
     term2 = (b**2 * np.sin(phi))**2
-    radius = np.sqrt((term1 + term2) / ((a * np.cos(phi))**2 + (b * np.sin(phi))**2))
-    return radius * (1 + 0.000072 * np.sin(2 * phi) + 0.000031 * np.cos(2 * phi))
+    radius = np.sqrt(
+        (term1 + term2) / ((a * np.cos(phi))**2 + (b * np.sin(phi))**2))
+    return radius * (1 + 0.000072 * np.sin(2 * phi) +
+                     0.000031 * np.cos(2 * phi))
+
 
 def quantum_haversine_distance(lat1, lon1, lat2, lon2):
     R = quantum_tensor_earth_radius((lat1 + lat2) / 2.0)
     phi1, phi2 = map(math.radians, [lat1, lat2])
     dphi = phi2 - phi1
     dlambda = math.radians(lon2 - lon1)
-    a = (np.sin(dphi / 2)**2) + (np.cos(phi1) * np.cos(phi2) * np.sin(dlambda / 2)**2)
+    a = (np.sin(dphi / 2)**
+         2) + (np.cos(phi1) * np.cos(phi2) * np.sin(dlambda / 2)**2)
     c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
     return R * c * (1 + 0.000045 * np.sin(dphi) * np.cos(dlambda))
+
 
 def reverse_geocode(lat, lon, cities):
     if not cities or not isinstance(cities, dict):
@@ -854,18 +1034,20 @@ def reverse_geocode(lat, lon, cities):
         return f"{nearest_city['name']}, {nearest_city['countrycode']}"
     return "Unknown Location"
 
+
 def generate_invite_code(length=24, use_checksum=True):
     if length < 16:
         raise ValueError("Invite code length must be at least 16 characters.")
-    
+
     charset = string.ascii_letters + string.digits
     invite_code = ''.join(secrets.choice(charset) for _ in range(length))
-    
+
     if use_checksum:
         checksum = hashlib.sha256(invite_code.encode('utf-8')).hexdigest()[:4]
         invite_code += checksum
-    
+
     return invite_code
+
 
 def validate_password_strength(password):
     if len(password) < 8:
@@ -881,6 +1063,7 @@ def validate_password_strength(password):
         return False
     return True
 
+
 def register_user(username, password, invite_code=None):
     username = sanitize_input(username)
     password = sanitize_input(password)
@@ -889,7 +1072,6 @@ def register_user(username, password, invite_code=None):
         logger.warning(f"User '{username}' provided a weak password.")
         return False, "Bad password, please use a stronger one."
 
-    # Hard stop for safety if admin somehow missing at runtime
     with sqlite3.connect(DB_FILE) as _db:
         _cur = _db.cursor()
         _cur.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1")
@@ -900,10 +1082,14 @@ def register_user(username, password, invite_code=None):
     registration_enabled = is_registration_enabled()
     if not registration_enabled:
         if not invite_code:
-            logger.warning(f"User '{username}' attempted registration without an invite code.")
+            logger.warning(
+                f"User '{username}' attempted registration without an invite code."
+            )
             return False, "Invite code is required for registration."
         if not validate_invite_code_format(invite_code):
-            logger.warning(f"User '{username}' provided an invalid invite code format: {invite_code}.")
+            logger.warning(
+                f"User '{username}' provided an invalid invite code format: {invite_code}."
+            )
             return False, "Invalid invite code format."
 
     hashed_password = ph.hash(password)
@@ -914,103 +1100,131 @@ def register_user(username, password, invite_code=None):
         try:
             db.execute("BEGIN")
 
-            cursor.execute("SELECT 1 FROM users WHERE username = ?", (username,))
+            cursor.execute("SELECT 1 FROM users WHERE username = ?",
+                           (username, ))
             if cursor.fetchone():
-                logger.warning(f"Registration failed: Username '{username}' is already taken.")
+                logger.warning(
+                    f"Registration failed: Username '{username}' is already taken."
+                )
                 db.rollback()
                 return False, "Error Try Again"
 
             if not registration_enabled:
-                cursor.execute("SELECT id, is_used FROM invite_codes WHERE code = ?", (invite_code,))
+                cursor.execute(
+                    "SELECT id, is_used FROM invite_codes WHERE code = ?",
+                    (invite_code, ))
                 row = cursor.fetchone()
                 if not row:
-                    logger.warning(f"User '{username}' provided an invalid invite code: {invite_code}.")
+                    logger.warning(
+                        f"User '{username}' provided an invalid invite code: {invite_code}."
+                    )
                     db.rollback()
                     return False, "Invalid invite code."
                 if row[1]:
-                    logger.warning(f"User '{username}' attempted to reuse invite code ID {row[0]}.")
+                    logger.warning(
+                        f"User '{username}' attempted to reuse invite code ID {row[0]}."
+                    )
                     db.rollback()
                     return False, "Invite code has already been used."
-                cursor.execute("UPDATE invite_codes SET is_used = 1 WHERE id = ?", (row[0],))
-                logger.info(f"Invite code ID {row[0]} used by user '{username}'.")
+                cursor.execute(
+                    "UPDATE invite_codes SET is_used = 1 WHERE id = ?",
+                    (row[0], ))
+                logger.info(
+                    f"Invite code ID {row[0]} used by user '{username}'.")
 
-            # Always regular user
             is_admin = 0
 
             cursor.execute(
                 "INSERT INTO users (username, password, is_admin, preferred_model) VALUES (?, ?, ?, ?)",
-                (username, hashed_password, is_admin, preferred_model_encrypted)
-            )
+                (username, hashed_password, is_admin,
+                 preferred_model_encrypted))
             user_id = cursor.lastrowid
-            logger.info(f"User '{username}' registered successfully with user_id {user_id}.")
+            logger.info(
+                f"User '{username}' registered successfully with user_id {user_id}."
+            )
 
             db.commit()
 
         except sqlite3.IntegrityError as e:
             db.rollback()
-            logger.error(f"Database integrity error during registration for user '{username}': {e}", exc_info=True)
+            logger.error(
+                f"Database integrity error during registration for user '{username}': {e}",
+                exc_info=True)
             return False, "Registration failed due to a database error."
         except Exception as e:
             db.rollback()
-            logger.error(f"Unexpected error during registration for user '{username}': {e}", exc_info=True)
+            logger.error(
+                f"Unexpected error during registration for user '{username}': {e}",
+                exc_info=True)
             return False, "An unexpected error occurred during registration."
 
     session.clear()
     session['username'] = username
     session['is_admin'] = False
     session.modified = True
-    logger.debug(f"Session updated for user '{username}'. Admin status: {session['is_admin']}.")
+    logger.debug(
+        f"Session updated for user '{username}'. Admin status: {session['is_admin']}."
+    )
 
     return True, "Registration successful."
+
+
 def check_rate_limit(user_id):
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
-                
-        cursor.execute("SELECT request_count, last_request_time FROM rate_limits WHERE user_id = ?", (user_id,))
+
+        cursor.execute(
+            "SELECT request_count, last_request_time FROM rate_limits WHERE user_id = ?",
+            (user_id, ))
         row = cursor.fetchone()
-        
+
         current_time = datetime.now()
-        
+
         if row:
             request_count, last_request_time = row
-            last_request_time = datetime.strptime(last_request_time, '%Y-%m-%d %H:%M:%S')
-            
-            
+            last_request_time = datetime.strptime(last_request_time,
+                                                  '%Y-%m-%d %H:%M:%S')
+
             if current_time - last_request_time > RATE_LIMIT_WINDOW:
-                
-                cursor.execute("UPDATE rate_limits SET request_count = 1, last_request_time = ? WHERE user_id = ?", 
-                               (current_time.strftime('%Y-%m-%d %H:%M:%S'), user_id))
+
+                cursor.execute(
+                    "UPDATE rate_limits SET request_count = 1, last_request_time = ? WHERE user_id = ?",
+                    (current_time.strftime('%Y-%m-%d %H:%M:%S'), user_id))
                 db.commit()
                 return True
             elif request_count < RATE_LIMIT_COUNT:
-                
-                cursor.execute("UPDATE rate_limits SET request_count = request_count + 1 WHERE user_id = ?", (user_id,))
+
+                cursor.execute(
+                    "UPDATE rate_limits SET request_count = request_count + 1 WHERE user_id = ?",
+                    (user_id, ))
                 db.commit()
                 return True
             else:
-                
+
                 return False
         else:
-            
-            cursor.execute("INSERT INTO rate_limits (user_id, request_count, last_request_time) VALUES (?, 1, ?)", 
-                           (user_id, current_time.strftime('%Y-%m-%d %H:%M:%S')))
+
+            cursor.execute(
+                "INSERT INTO rate_limits (user_id, request_count, last_request_time) VALUES (?, 1, ?)",
+                (user_id, current_time.strftime('%Y-%m-%d %H:%M:%S')))
             db.commit()
             return True
+
 
 def generate_secure_invite_code(length=16, hmac_length=16):
     alphabet = string.ascii_uppercase + string.digits
     invite_code = ''.join(secrets.choice(alphabet) for _ in range(length))
-    hmac_digest = hmac.new(
-        SECRET_KEY,           
-        invite_code.encode(), 
-        hashlib.sha256
-    ).hexdigest()[:hmac_length] 
+    hmac_digest = hmac.new(SECRET_KEY, invite_code.encode(),
+                           hashlib.sha256).hexdigest()[:hmac_length]
     return f"{invite_code}-{hmac_digest}"
 
-def validate_invite_code_format(invite_code_with_hmac, expected_length=33, hmac_length=16):
+
+def validate_invite_code_format(invite_code_with_hmac,
+                                expected_length=33,
+                                hmac_length=16):
     try:
         invite_code, provided_hmac = invite_code_with_hmac.rsplit('-', 1)
-        
+
         if len(invite_code) != expected_length - hmac_length - 1:
             return False
 
@@ -1018,15 +1232,13 @@ def validate_invite_code_format(invite_code_with_hmac, expected_length=33, hmac_
         if not all(char in allowed_chars for char in invite_code):
             return False
 
-        expected_hmac = hmac.new(
-            SECRET_KEY,
-            invite_code.encode(),
-            hashlib.sha256
-        ).hexdigest()[:hmac_length]
+        expected_hmac = hmac.new(SECRET_KEY, invite_code.encode(),
+                                 hashlib.sha256).hexdigest()[:hmac_length]
 
         return hmac.compare_digest(expected_hmac, provided_hmac)
     except ValueError:
         return False
+
 
 def authenticate_user(username, password):
     username = sanitize_input(username)
@@ -1034,7 +1246,9 @@ def authenticate_user(username, password):
 
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
-        cursor.execute("SELECT password, is_admin, preferred_model FROM users WHERE username = ?", (username,))
+        cursor.execute(
+            "SELECT password, is_admin, preferred_model FROM users WHERE username = ?",
+            (username, ))
         row = cursor.fetchone()
         if row:
             stored_password, is_admin, preferred_model_encrypted = row
@@ -1042,29 +1256,35 @@ def authenticate_user(username, password):
                 ph.verify(stored_password, password)
                 if ph.check_needs_rehash(stored_password):
                     new_hash = ph.hash(password)
-                    cursor.execute("UPDATE users SET password = ? WHERE username = ?", (new_hash, username))
+                    cursor.execute(
+                        "UPDATE users SET password = ? WHERE username = ?",
+                        (new_hash, username))
                     db.commit()
-                               
+
                 session.clear()
                 session['username'] = username
                 session['is_admin'] = bool(is_admin)
-                
+
                 return True
             except VerifyMismatchError:
                 return False
     return False
 
+
 def get_user_id(username):
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
-        cursor.execute("SELECT id FROM users WHERE username = ?", (username,))
+        cursor.execute("SELECT id FROM users WHERE username = ?", (username, ))
         row = cursor.fetchone()
         if row:
             return row[0]
         else:
             return None
 
-def save_hazard_report(lat, lon, street_name, vehicle_type, destination, result, cpu_usage, ram_usage, quantum_results, user_id, risk_level, model_used):
+
+def save_hazard_report(lat, lon, street_name, vehicle_type, destination,
+                       result, cpu_usage, ram_usage, quantum_results, user_id,
+                       risk_level, model_used):
     lat = sanitize_input(lat)
     lon = sanitize_input(lon)
     street_name = sanitize_input(street_name)
@@ -1089,25 +1309,28 @@ def save_hazard_report(lat, lon, street_name, vehicle_type, destination, result,
 
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO hazard_reports (
                 latitude, longitude, street_name, vehicle_type, destination, result,
                 cpu_usage, ram_usage, quantum_results, user_id, timestamp, risk_level, model_used
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            lat_encrypted, lon_encrypted, street_name_encrypted, vehicle_type_encrypted,
-            destination_encrypted, result_encrypted, cpu_usage_encrypted, ram_usage_encrypted,
-            quantum_results_encrypted, user_id, timestamp, risk_level_encrypted, model_used_encrypted
-        ))
-        report_id = cursor.lastrowid 
+        """, (lat_encrypted, lon_encrypted, street_name_encrypted,
+              vehicle_type_encrypted, destination_encrypted, result_encrypted,
+              cpu_usage_encrypted, ram_usage_encrypted,
+              quantum_results_encrypted, user_id, timestamp,
+              risk_level_encrypted, model_used_encrypted))
+        report_id = cursor.lastrowid
         db.commit()
 
     return report_id
 
+
 def get_user_preferred_model(user_id):
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
-        cursor.execute("SELECT preferred_model FROM users WHERE id = ?", (user_id,))
+        cursor.execute("SELECT preferred_model FROM users WHERE id = ?",
+                       (user_id, ))
         row = cursor.fetchone()
         if row and row[0]:
             decrypted_model = decrypt_data(row[0])
@@ -1118,10 +1341,13 @@ def get_user_preferred_model(user_id):
         else:
             return 'openai'
 
+
 def get_hazard_reports(user_id):
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
-        cursor.execute("SELECT * FROM hazard_reports WHERE user_id = ? ORDER BY timestamp DESC", (user_id,))
+        cursor.execute(
+            "SELECT * FROM hazard_reports WHERE user_id = ? ORDER BY timestamp DESC",
+            (user_id, ))
         reports = cursor.fetchall()
         decrypted_reports = []
         for report in reports:
@@ -1144,10 +1370,13 @@ def get_hazard_reports(user_id):
             decrypted_reports.append(decrypted_report)
         return decrypted_reports
 
+
 def get_hazard_report_by_id(report_id, user_id):
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
-        cursor.execute("SELECT * FROM hazard_reports WHERE id = ? AND user_id = ?", (report_id, user_id))
+        cursor.execute(
+            "SELECT * FROM hazard_reports WHERE id = ? AND user_id = ?",
+            (report_id, user_id))
         report = cursor.fetchone()
         if report:
             decrypted_report = {
@@ -1170,8 +1399,10 @@ def get_hazard_report_by_id(report_id, user_id):
         else:
             return None
 
+
 def get_cpu_ram_usage():
     return psutil.cpu_percent(), psutil.virtual_memory().percent
+
 
 @qml.qnode(dev)
 def quantum_hazard_scan(cpu_usage, ram_usage):
@@ -1194,11 +1425,13 @@ async def phf_filter_input(input_text: str) -> tuple[bool, str]:
     Probabilistic Harm Filtering using only OpenAI.
     Returns (is_safe: bool, detail: str).
     """
-    logger.debug("Entering phf_filter_input (OpenAI-only) with input length %d",
-                 len(input_text) if isinstance(input_text, str) else 0)
+    logger.debug(
+        "Entering phf_filter_input (OpenAI-only) with input length %d",
+        len(input_text) if isinstance(input_text, str) else 0)
 
     if not input_text or not isinstance(input_text, str):
-        logger.warning("phf_filter_input received invalid or empty input_text.")
+        logger.warning(
+            "phf_filter_input received invalid or empty input_text.")
         return False, "Invalid input."
 
     openai_prompt = (
@@ -1217,8 +1450,7 @@ async def phf_filter_input(input_text: str) -> tuple[bool, str]:
         "---[/inspectthiscontent]\n"
         "**Assessment Format**:\n"
         "- Label each category as **Safe** or **Flagged**.\n"
-        "- Conclude with a **Final Recommendation**: Safe or Flagged.\n"
-    )
+        "- Conclude with a **Final Recommendation**: Safe or Flagged.\n")
 
     try:
         logger.debug("Attempting OpenAI PHF check.")
@@ -1234,43 +1466,35 @@ async def phf_filter_input(input_text: str) -> tuple[bool, str]:
     return False, "PHF processing failed."
 
 
-
 async def scan_debris_for_route(
-    lat: float,
-    lon: float,
-    vehicle_type: str,
-    destination: str,
-    user_id: int,
-    selected_model: str = None
-) -> tuple[str, str, str, str, str, str]:
-    
+        lat: float,
+        lon: float,
+        vehicle_type: str,
+        destination: str,
+        user_id: int,
+        selected_model: str = None) -> tuple[str, str, str, str, str, str]:
+
     logger.debug(
         "Entering scan_debris_for_route: lat=%s, lon=%s, vehicle=%s, dest=%s, user=%s",
-        lat, lon, vehicle_type, destination, user_id
-    )
+        lat, lon, vehicle_type, destination, user_id)
 
-    # Always use OpenAI
     model_used = "OpenAI"
 
-    # 1) Resource usage
     try:
         cpu_usage, ram_usage = get_cpu_ram_usage()
     except Exception:
         cpu_usage, ram_usage = 0.0, 0.0
 
-    # 2) Quantum scan
     try:
         quantum_results = quantum_hazard_scan(cpu_usage, ram_usage)
     except Exception:
         quantum_results = "Scan Failed"
 
-    # 3) Reverse-geocode street name via OpenAI
     try:
         street_name = await fetch_street_name_llm(lat, lon)
     except Exception:
         street_name = "Unknown Location"
 
-    # 4) Build the OpenAI-only prompt
     openai_prompt = f"""
 [action] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan. [/action]
 [locationreport]
@@ -1298,14 +1522,14 @@ Please assess the following:
 [replyexample] Include recommendations for drivers, suggested detours only if required, and urgency levels based on the findings. [/replyexample]
 """
 
-    # 5) Call OpenAI
-    report = await run_openai_completion(openai_prompt) or "OpenAI failed to respond."
+    report = await run_openai_completion(openai_prompt
+                                         ) or "OpenAI failed to respond."
     report = report.strip()
 
-    # 6) Determine harm level (if needed downstream)
     harm_level = calculate_harm_level(report)
 
-    logger.debug("Exiting scan_debris_for_route with model_used=%s", model_used)
+    logger.debug("Exiting scan_debris_for_route with model_used=%s",
+                 model_used)
     return (
         report,
         f"{cpu_usage}",
@@ -1317,12 +1541,14 @@ Please assess the following:
 
 
 async def run_openai_completion(prompt):
-    logger.debug("Entering run_openai_completion with prompt length: %d", len(prompt) if prompt else 0)
+    logger.debug("Entering run_openai_completion with prompt length: %d",
+                 len(prompt) if prompt else 0)
     max_retries = 5
     openai_api_key = os.getenv('OPENAI_API_KEY')
     if not openai_api_key:
         logger.error("OpenAI API key not found in environment variables.")
-        logger.debug("Exiting run_openai_completion early due to missing API key.")
+        logger.debug(
+            "Exiting run_openai_completion early due to missing API key.")
         return None
 
     timeout = httpx.Timeout(60.0, connect=20.0, read=20.0)
@@ -1332,74 +1558,131 @@ async def run_openai_completion(prompt):
     async with httpx.AsyncClient(timeout=timeout) as client:
         for attempt in range(1, max_retries + 1):
             try:
-                logger.debug("run_openai_completion attempt %d sending request.", attempt)
+                logger.debug(
+                    "run_openai_completion attempt %d sending request.",
+                    attempt)
                 headers = {
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {openai_api_key}"
                 }
                 data = {
                     "model": "gpt-4o",
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": [{
+                        "role": "user",
+                        "content": prompt
+                    }],
                     "temperature": 0.7
                 }
 
-                response = await client.post("https://api.openai.com/v1/chat/completions", json=data, headers=headers)
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    json=data,
+                    headers=headers)
                 response.raise_for_status()
                 result = response.json()
-                clean_content = result["choices"][0]["message"]["content"].strip()
-                logger.info("run_openai_completion succeeded on attempt %d.", attempt)
-                logger.debug("Exiting run_openai_completion with successful response.")
+                clean_content = result["choices"][0]["message"][
+                    "content"].strip()
+                logger.info("run_openai_completion succeeded on attempt %d.",
+                            attempt)
+                logger.debug(
+                    "Exiting run_openai_completion with successful response.")
                 return clean_content
 
             except (httpx.TimeoutException, httpx.ConnectTimeout) as e:
-                logger.error("Attempt %d failed due to timeout: %s", attempt, e, exc_info=True)
+                logger.error("Attempt %d failed due to timeout: %s",
+                             attempt,
+                             e,
+                             exc_info=True)
             except httpx.RequestError as e:
-                logger.error("Attempt %d failed due to request error: %s", attempt, e, exc_info=True)
+                logger.error("Attempt %d failed due to request error: %s",
+                             attempt,
+                             e,
+                             exc_info=True)
             except KeyError as e:
-                logger.error("Attempt %d failed due to missing expected key in response: %s", attempt, e, exc_info=True)
+                logger.error(
+                    "Attempt %d failed due to missing expected key in response: %s",
+                    attempt,
+                    e,
+                    exc_info=True)
             except json.JSONDecodeError as e:
-                logger.error("Attempt %d failed due to JSON parsing error: %s", attempt, e, exc_info=True)
+                logger.error("Attempt %d failed due to JSON parsing error: %s",
+                             attempt,
+                             e,
+                             exc_info=True)
             except Exception as e:
-                logger.error("Attempt %d failed due to unexpected error: %s", attempt, e, exc_info=True)
+                logger.error("Attempt %d failed due to unexpected error: %s",
+                             attempt,
+                             e,
+                             exc_info=True)
 
             if attempt < max_retries:
                 logger.info("Retrying run_openai_completion after delay.")
                 await asyncio.sleep(delay)
                 delay *= backoff_factor
 
-    logger.warning("All attempts to run_openai_completion have failed. Returning None.")
+    logger.warning(
+        "All attempts to run_openai_completion have failed. Returning None.")
     logger.debug("Exiting run_openai_completion with failure.")
     return None
-    
+
+
 class LoginForm(FlaskForm):
-    username = StringField('Username', validators=[DataRequired()], render_kw={"autocomplete": "off"})
-    password = PasswordField('Password', validators=[DataRequired()], render_kw={"autocomplete": "off"})
+    username = StringField('Username',
+                           validators=[DataRequired()],
+                           render_kw={"autocomplete": "off"})
+    password = PasswordField('Password',
+                             validators=[DataRequired()],
+                             render_kw={"autocomplete": "off"})
     submit = SubmitField('Login')
 
+
 class RegisterForm(FlaskForm):
-    username = StringField('Username', validators=[DataRequired()], render_kw={"autocomplete": "off"})
-    password = PasswordField('Password', validators=[DataRequired()], render_kw={"autocomplete": "off"})
-    invite_code = StringField('Invite Code', render_kw={"autocomplete": "off"}) 
+    username = StringField('Username',
+                           validators=[DataRequired()],
+                           render_kw={"autocomplete": "off"})
+    password = PasswordField('Password',
+                             validators=[DataRequired()],
+                             render_kw={"autocomplete": "off"})
+    invite_code = StringField('Invite Code', render_kw={"autocomplete": "off"})
     submit = SubmitField('Register')
+
 
 class SettingsForm(FlaskForm):
     enable_registration = SubmitField('Enable Registration')
     disable_registration = SubmitField('Disable Registration')
     generate_invite_code = SubmitField('Generate New Invite Code')
 
+
 class ReportForm(FlaskForm):
-    latitude = StringField('Latitude', validators=[DataRequired(), Length(max=50)])
-    longitude = StringField('Longitude', validators=[DataRequired(), Length(max=50)])
-    vehicle_type = StringField('Vehicle Type', validators=[DataRequired(), Length(max=50)])
-    destination = StringField('Destination', validators=[DataRequired(), Length(max=100)])
-    result = TextAreaField('Result', validators=[DataRequired(), Length(max=2000)])
-    risk_level = SelectField('Risk Level', choices=[('Low', 'Low'), ('Medium', 'Medium'), ('High', 'High')], validators=[DataRequired()])
-    model_selection = SelectField('Select Model', choices=[('grok', 'Grok'), ('openai', 'OpenAI'), ('gemini', 'Gemini')], validators=[DataRequired()])
+    latitude = StringField('Latitude',
+                           validators=[DataRequired(),
+                                       Length(max=50)])
+    longitude = StringField('Longitude',
+                            validators=[DataRequired(),
+                                        Length(max=50)])
+    vehicle_type = StringField('Vehicle Type',
+                               validators=[DataRequired(),
+                                           Length(max=50)])
+    destination = StringField('Destination',
+                              validators=[DataRequired(),
+                                          Length(max=100)])
+    result = TextAreaField('Result',
+                           validators=[DataRequired(),
+                                       Length(max=2000)])
+    risk_level = SelectField('Risk Level',
+                             choices=[('Low', 'Low'), ('Medium', 'Medium'),
+                                      ('High', 'High')],
+                             validators=[DataRequired()])
+    model_selection = SelectField('Select Model',
+                                  choices=[('openai', 'OpenAI')],
+                                  validators=[DataRequired()])
     submit = SubmitField('Submit Report')
+
 
 @app.route('/')
 def index():
     return redirect(url_for('home'))
+
 
 @app.route('/home')
 def home():
@@ -1502,7 +1785,7 @@ def home():
             <h1 class="display-4 gradient-text">Quantum Road Scanner</h1>
             <p class="lead">Enhancing Road Safety through Quantum Simulations and Hypertime Analysis</p>
         </div>
-        
+
         <div class="section">
             <h3 class="section-title">Introduction</h3>
             <p>
@@ -1512,7 +1795,7 @@ def home():
                 QRS represents a significant advancement in applying theoretical physics to practical challenges. It builds upon foundational research in quantum mechanics, computational physics, and hypertime theories to offer novel solutions for road safety and traffic management.
             </p>
         </div>
-        
+
         <div class="section">
             <h3 class="section-title">Historical Background and Innovations</h3>
             <p>
@@ -1539,7 +1822,7 @@ def home():
                 These foundational advancements paved the way for the creation of QRS, which integrates these concepts to simulate road conditions and enhance safety measures.
             </p>
         </div>
-        
+
         <div class="section">
             <h3 class="section-title">My Contribution and Learning Journey</h3>
             <p>
@@ -1563,7 +1846,7 @@ def home():
                 My contributions involved enhancing the efficiency of these algorithms and ensuring they could operate within the constraints of current quantum computing capabilities. Collaborating with BlaiseLabs allowed me to integrate theoretical knowledge with practical implementation, leading to the development of the QRS system.
             </p>
         </div>
-        
+
         <div class="section">
             <h3 class="section-title">Hypertime and Multiverse Analysis</h3>
             <p>
@@ -1585,16 +1868,16 @@ def home():
             </ul>
             <div class="equation">
                 <strong>Hypertime Wave Function:</strong><br>
-                \( \Psi(\vec{x}, t_1, t_2, ..., t_n) = \prod_{i=1}^{n} \psi_i(\vec{x}, t_i) \)
+            
             </div>
             <p>
-                This equation represents the combined state of a system across multiple temporal dimensions \( t_1, t_2, ..., t_n \), where \( \vec{x} \) denotes spatial coordinates.
+          
             </p>
             <p>
                 By simulating these multiple temporal paths, QRS can provide insights into potential future events on the road, enhancing predictive capabilities without relying on actual data collection.
             </p>
         </div>
-        
+
         <div class="section">
             <h3 class="section-title">Quantum Algorithms and Computations</h3>
             <p>
@@ -1604,7 +1887,7 @@ def home():
                 <li>
                     <strong>Quantum Fourier Transform (QFT):</strong> A key algorithm for transforming quantum states between time and frequency domains, essential for analyzing periodicities in simulated traffic patterns.
                     <div class="equation">
-                        \( |k\rangle = \frac{1}{\sqrt{N}} \sum_{n=0}^{N-1} e^{\frac{2\pi i k n}{N}} |n\rangle \)
+                  
                     </div>
                 </li>
                 <li>
@@ -1621,7 +1904,7 @@ def home():
                 These algorithms allow QRS to process complex simulations efficiently, exploring a vast space of possible scenarios to identify optimal safety recommendations.
             </p>
         </div>
-        
+
         <div class="section">
             <h3 class="section-title">Hypertime Nanobot Simulation</h3>
             <p>
@@ -1643,16 +1926,15 @@ def home():
             </ul>
             <div class="equation">
                 <strong>Nanobot State Function:</strong><br>
-                \( \Phi(\vec{x}, t, \tau) = \int \psi(\vec{x}, t') \delta(t' - t - \tau) dt' \)
+            
             </div>
             <p>
-                This equation represents the state of a nanobot at position \( \vec{x} \), conventional time \( t \), and hypertime offset \( \tau \), integrating over possible states \( \psi \).
             </p>
             <p>
                 By simulating the actions of these nanobots, QRS can enhance the depth and accuracy of its hypertime analysis.
             </p>
         </div>
-        
+
         <div class="section">
             <h3 class="section-title">Algorithmic Process Overview</h3>
             <p>
@@ -1673,7 +1955,7 @@ def home():
                 This process enables QRS to efficiently simulate and analyze a multitude of potential scenarios, providing valuable insights without real-world data collection.
             </p>
         </div>
-        
+
         <div class="section">
             <h3 class="section-title">Quantum Zoning and Noise Protections</h3>
             <p>
@@ -1708,7 +1990,7 @@ def home():
                 These measures ensure that QRS can perform accurate and reliable simulations, providing trustworthy results without any data leakage.
             </p>
         </div>
-        
+
         <div class="section">
             <h3 class="section-title">Practical Application</h3>
             <p>
@@ -1735,7 +2017,7 @@ def home():
                 This process helps the driver make informed decisions without relying on actual traffic data, ensuring privacy and data security.
             </p>
         </div>
-        
+
         <div class="section">
             <h3 class="section-title">Future Developments</h3>
             <p>
@@ -1759,7 +2041,7 @@ def home():
                 These advancements could significantly impact how we approach complex systems and predictive modeling.
             </p>
         </div>
-        
+
         <div class="section">
             <h3 class="section-title">Acknowledgments</h3>
             <p>
@@ -1780,7 +2062,7 @@ def home():
                 Their collective efforts have been instrumental in bringing QRS from a theoretical concept to a practical tool.
             </p>
         </div>
-        
+
         <div class="section">
             <h3 class="section-title">References</h3>
             <ul class="references">
@@ -1798,7 +2080,7 @@ def home():
             </ul>
 
         </div>
-        
+
         <div class="text-center mt-5">
             <a href="https://gitlab.com/graylan01/quantum_road_scanner/-/blob/main/paper.md" class="btn btn-custom btn-lg">Learn More About Quantum Road Scanning</a>
         </div>
@@ -1835,7 +2117,7 @@ def login():
     <meta charset="UTF-8">
     <title>Login - QRS</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    
+
     <link rel="stylesheet" href="{{ url_for('static', filename='css/orbitron.css') }}" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
           integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
@@ -1911,7 +2193,10 @@ def login():
     </div>
 </body>
 </html>
-    """, form=form, error_message=error_message)
+    """,
+                                  form=form,
+                                  error_message=error_message)
+
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -1922,15 +2207,15 @@ def register():
         username = form.username.data
         password = form.password.data
         invite_code = form.invite_code.data if not registration_enabled else None
-                
+
         success, message = register_user(username, password, invite_code)
-        
+
         if success:
             flash(message, "success")
             return redirect(url_for('login'))
         else:
             error_message = message
-        
+
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
@@ -2025,7 +2310,11 @@ def register():
     </div>
 </body>
 </html>
-    """, form=form, error_message=error_message, registration_enabled=registration_enabled)
+    """,
+                                  form=form,
+                                  error_message=error_message,
+                                  registration_enabled=registration_enabled)
+
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
@@ -2035,7 +2324,7 @@ def settings():
     global registration_enabled
     message = ""
     new_invite_code = None
-    form = SettingsForm() 
+    form = SettingsForm()
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'enable_registration':
@@ -2050,7 +2339,8 @@ def settings():
             new_invite_code = generate_secure_invite_code()
             with sqlite3.connect(DB_FILE) as db:
                 cursor = db.cursor()
-                cursor.execute("INSERT INTO invite_codes (code) VALUES (?)", (new_invite_code,))
+                cursor.execute("INSERT INTO invite_codes (code) VALUES (?)",
+                               (new_invite_code, ))
                 db.commit()
             message = f"New invite code generated: {new_invite_code}"
 
@@ -2225,7 +2515,12 @@ def settings():
 
 </body>
 </html>
-    """, message=message, new_invite_code=new_invite_code, invite_codes=invite_codes, form=form)
+    """,
+                                  message=message,
+                                  new_invite_code=new_invite_code,
+                                  invite_codes=invite_codes,
+                                  form=form)
+
 
 @app.route('/logout')
 def logout():
@@ -2234,17 +2529,20 @@ def logout():
     return redirect(url_for('home'))
 
 
-    
 @app.route('/view_report/<int:report_id>', methods=['GET'])
 def view_report(report_id):
     if 'username' not in session:
-        logger.warning(f"Unauthorized access attempt to view_report by user: {session.get('username')}")
+        logger.warning(
+            f"Unauthorized access attempt to view_report by user: {session.get('username')}"
+        )
         return redirect(url_for('login'))
 
     user_id = get_user_id(session['username'])
     report = get_hazard_report_by_id(report_id, user_id)
     if not report:
-        logger.error(f"Report not found or access denied for report_id: {report_id} by user_id: {user_id}")
+        logger.error(
+            f"Report not found or access denied for report_id: {report_id} by user_id: {user_id}"
+        )
         return "Report not found or access denied.", 404
 
     trigger_words = {
@@ -2287,9 +2585,9 @@ def view_report(report_id):
         c2 = int(color2[1:], 16)
         r1, g1, b1 = (c1 >> 16) & 0xff, (c1 >> 8) & 0xff, c1 & 0xff
         r2, g2, b2 = (c2 >> 16) & 0xff, (c2 >> 8) & 0xff, c2 & 0xff
-        r = int(r1 + (r2 - r1)*t)
-        g = int(g1 + (g2 - g1)*t)
-        b = int(b1 + (b2 - b1)*t)
+        r = int(r1 + (r2 - r1) * t)
+        g = int(g1 + (g2 - g1) * t)
+        b = int(b1 + (b2 - b1) * t)
         return f"#{r:02x}{g:02x}{b:02x}"
 
     green = "#56ab2f"
@@ -2305,14 +2603,14 @@ def view_report(report_id):
 
     report_md = markdown(report['result'])
     allowed_tags = list(bleach.sanitizer.ALLOWED_TAGS) + [
-        'p', 'ul', 'ol', 'li', 'strong', 'em',
-        'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br'
+        'p', 'ul', 'ol', 'li', 'strong', 'em', 'h1', 'h2', 'h3', 'h4', 'h5',
+        'h6', 'br'
     ]
     report_html = bleach.clean(report_md, tags=allowed_tags)
     report_html_escaped = report_html.replace('\\', '\\\\')
     csrf_token = generate_csrf()
 
-    return render_template_string("""
+    return render_template_string(r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2521,8 +2819,9 @@ def view_report(report_id):
     }
 
     function splitIntoSentences(text) {
-        text = text.replace(/\d+/g, '');
-        const sentenceEndings = /(?<!\b(?:[A-Za-z]\.|\d+\.\d+))(?<=\.|\!|\?)(?=\s+)/;
+        text = text.replace(/\\d+/g, '');
+        const sentenceEndings = /(?<!\\b(?:[A-Za-z]\\.|\d+\\.\\d+))(?<=\\.|\\!|\\?)(?=\\s+)/;
+
         return text.split(sentenceEndings).filter(sentence => sentence.trim().length > 0);
     }
 
@@ -2691,7 +2990,11 @@ def view_report(report_id):
 </script>
 </body>
 </html>
-    """, report=report, report_html_escaped=report_html_escaped, csrf_token=csrf_token, wheel_color=wheel_color)
+    """,
+                                  report=report,
+                                  report_html_escaped=report_html_escaped,
+                                  csrf_token=csrf_token,
+                                  wheel_color=wheel_color)
 
 
 @app.route('/dashboard', methods=['GET', 'POST'])
@@ -2711,7 +3014,7 @@ def dashboard():
     <meta charset="UTF-8">
     <title>Dashboard - Quantum Road Scanner</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    
+
     <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
           integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
     <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
@@ -2720,7 +3023,7 @@ def dashboard():
           integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
           integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
-                    
+
     <style>
         body {
             background-color: #121212;
@@ -2847,7 +3150,7 @@ def dashboard():
     </style>
 </head>
 <body>
-    
+
     <div class="sidebar">
         <div class="navbar-brand">QRS</div>
         <a href="#" class="nav-link active" onclick="showSection('step1')">
@@ -2862,7 +3165,7 @@ def dashboard():
             <i class="fas fa-sign-out-alt"></i> <span>Logout</span>
         </a>
     </div>
-    
+
     <div class="content">
         <div class="stepper">
             <div class="step active" id="stepper1">
@@ -2878,7 +3181,7 @@ def dashboard():
                 Run Scan
             </div>
         </div>
-        
+
         <div id="step1" class="form-section active">
             <form id="grabCoordinatesForm">
                 <div class="form-group">
@@ -2898,7 +3201,7 @@ def dashboard():
             </form>
             <div id="statusMessage1" class="mt-3"></div>
         </div>
-        
+
         <div id="step2" class="form-section">
             <h4>Street Name</h4>
             <p id="streetName">Fetching street name...</p>
@@ -2906,7 +3209,7 @@ def dashboard():
                 <i class="fas fa-arrow-right"></i> Next
             </button>
         </div>
-        
+
         <div id="step3" class="form-section">
             <form id="runScanForm">
                 <div class="form-group">
@@ -2935,7 +3238,7 @@ def dashboard():
             </form>
             <div id="statusMessage3" class="mt-3"></div>
         </div>
-        
+
         <div id="reportsSection" class="mt-5">
             <h3>Your Reports</h3>
             {% if reports %}
@@ -2964,7 +3267,7 @@ def dashboard():
             {% endif %}
         </div>
     </div>
-    
+
     <div class="modal fade" id="reportModal" tabindex="-1" aria-labelledby="reportModalLabel" aria-hidden="true">
       <div class="modal-dialog modal-lg">
         <div class="modal-content">
@@ -2984,17 +3287,17 @@ def dashboard():
             <span class="sr-only">Scanning...</span>
         </div>
     </div>
-    
+
     <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
             integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
     <script src="{{ url_for('static', filename='js/popper.min.js') }}"
             integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
     <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
             integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
-            
+
     <script>
         var csrf_token = {{ csrf_token | tojson }};
-    
+
         $.ajaxSetup({
             beforeSend: function(xhr, settings) {
                 if (!/^GET|HEAD|OPTIONS|TRACE$/i.test(settings.type) && !this.crossDomain) {
@@ -3107,11 +3410,11 @@ def dashboard():
                 const data = await response.json();
                 $('.loading-spinner').hide();
                 $('#statusMessage3').text(data.message);
-            
+
                 if (data.report_id) {
 
                     viewReport(data.report_id);
-                
+
                 }
             } catch (error) {
                 $('.loading-spinner').hide();
@@ -3155,16 +3458,24 @@ def dashboard():
     </script>
 </body>
 </html>
-    """, reports=reports, csrf_token=csrf_token, preferred_model=preferred_model)
+    """,
+                                  reports=reports,
+                                  csrf_token=csrf_token,
+                                  preferred_model=preferred_model)
+
 
 def calculate_harm_level(result):
-    if re.search(r'\b(high|severe|critical|urgent|dangerous)\b', result, re.IGNORECASE):
+    if re.search(r'\b(high|severe|critical|urgent|dangerous)\b', result,
+                 re.IGNORECASE):
         return "High"
-    elif re.search(r'\b(medium|moderate|caution|warning)\b', result, re.IGNORECASE):
+    elif re.search(r'\b(medium|moderate|caution|warning)\b', result,
+                   re.IGNORECASE):
         return "Medium"
-    elif re.search(r'\b(low|minimal|safe|minor|normal)\b', result, re.IGNORECASE):
+    elif re.search(r'\b(low|minimal|safe|minor|normal)\b', result,
+                   re.IGNORECASE):
         return "Low"
-    return "Neutral" 
+    return "Neutral"
+
 
 @app.route('/start_scan', methods=['POST'])
 async def start_scan_route():
@@ -3176,7 +3487,8 @@ async def start_scan_route():
 
     if not session.get('is_admin', False):
         if not check_rate_limit(user_id):
-            return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
+            return jsonify({"error":
+                            "Rate limit exceeded. Try again later."}), 429
 
     data = request.get_json()
 
@@ -3204,18 +3516,25 @@ async def start_scan_route():
     combined_input = f"Vehicle Type: {vehicle_type}\nDestination: {destination}"
     is_allowed, analysis = await phf_filter_input(combined_input)
     if not is_allowed:
-        return jsonify({"error": "Input contains disallowed content.", "details": analysis}), 400
+        return jsonify({
+            "error": "Input contains disallowed content.",
+            "details": analysis
+        }), 400
 
     result, cpu_usage, ram_usage, quantum_results, street_name, model_used = await scan_debris_for_route(
-        lat_float, lon_float, vehicle_type, destination, user_id, selected_model=model_selection
-    )
+        lat_float,
+        lon_float,
+        vehicle_type,
+        destination,
+        user_id,
+        selected_model=model_selection)
 
     harm_level = calculate_harm_level(result)
 
-    report_id = save_hazard_report(
-        lat_float, lon_float, street_name, vehicle_type, destination, result,
-        cpu_usage, ram_usage, quantum_results, user_id, harm_level, model_used
-    )
+    report_id = save_hazard_report(lat_float, lon_float, street_name,
+                                   vehicle_type, destination, result,
+                                   cpu_usage, ram_usage, quantum_results,
+                                   user_id, harm_level, model_used)
 
     return jsonify({
         "message": "Scan completed successfully",
@@ -3224,6 +3543,7 @@ async def start_scan_route():
         "model_used": model_used,
         "report_id": report_id
     })
+
 
 @app.route('/reverse_geocode', methods=['GET'])
 async def reverse_geocode_route():
@@ -3252,19 +3572,27 @@ async def reverse_geocode_route():
     try:
 
         street_name = await fetch_street_name_llm(lat, lon)
-        logger.info(f"Successfully resolved street name using LLM: {street_name}")
+        logger.info(
+            f"Successfully resolved street name using LLM: {street_name}")
         return jsonify({"street_name": street_name}), 200
     except Exception as e:
-        logger.warning("LLM geocoding failed, falling back to standard reverse_geocode.", exc_info=True)
-        
+        logger.warning(
+            "LLM geocoding failed, falling back to standard reverse_geocode.",
+            exc_info=True)
+
         try:
 
             street_name = reverse_geocode(lat, lon)
-            logger.info(f"Successfully resolved street name using fallback method: {street_name}")
+            logger.info(
+                f"Successfully resolved street name using fallback method: {street_name}"
+            )
             return jsonify({"street_name": street_name}), 200
         except Exception as fallback_e:
-            logger.exception(f"Both LLM and fallback reverse geocoding failed: {fallback_e}")
+            logger.exception(
+                f"Both LLM and fallback reverse geocoding failed: {fallback_e}"
+            )
             return jsonify({"error": "Internal server error."}), 500
+
 
 if __name__ == '__main__':
     serve(app, host='0.0.0.0', port=3000, threads=4)
