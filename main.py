@@ -1,4 +1,14 @@
-
+import logging
+import httpx
+import backoff
+import sqlite3
+import psutil
+from flask import (Flask, render_template_string, request, redirect, url_for,
+                   session, jsonify, flash, send_from_directory, abort)
+from flask_wtf import FlaskForm, CSRFProtect
+from flask_wtf.csrf import generate_csrf
+from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
+from wtforms.validators import DataRequired, Length, Regexp, ValidationError
 from flask_wtf.file import FileField, FileRequired, FileAllowed
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives import hashes
@@ -44,7 +54,7 @@ import itertools
 import os
 import itertools
 import numpy as np
-import logging
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -1542,6 +1552,11 @@ Please assess the following:
 
 async def run_openai_completion(prompt):
 
+    logger = logging.getLogger(__name__)
+
+    logger.debug("Entering run_openai_completion with prompt length: %d",
+                 len(prompt) if prompt else 0)
+
     max_retries = 5
     backoff_factor = 2
     delay = 1
@@ -1556,51 +1571,71 @@ async def run_openai_completion(prompt):
     url = "https://api.openai.com/v1/responses"
 
     async def _extract_text_from_responses(payload: dict) -> Union[str, None]:
-
+        """
+        Robust extraction for Responses API outputs.
+        Tries several common shapes:
+          - payload['text']
+          - payload['output'][*]['content'][*]['text'|'parts']
+          - payload['output'][*] plain strings
+          - payload['choices'] fallbacks (chat/completions style)
+        Returns the first reasonable concatenated string or None.
+        """
+        # quick text field
         if isinstance(payload.get("text"), str) and payload["text"].strip():
             return payload["text"].strip()
 
+        # 'output' style (Responses API)
         out = payload.get("output")
         if isinstance(out, list) and out:
             parts = []
             for item in out:
+                # if item is a string, accept it
                 if isinstance(item, str) and item.strip():
                     parts.append(item.strip())
                     continue
                 if not isinstance(item, dict):
                     continue
+                # many Responses API outputs have a 'content' list
                 content = item.get("content") or item.get("contents") or item.get("data") or []
                 if isinstance(content, list):
                     for c in content:
                         if isinstance(c, str) and c.strip():
                             parts.append(c.strip())
                         elif isinstance(c, dict):
+                            # some shapes: {'type':'output_text','text': '...'}
                             if "text" in c and isinstance(c["text"], str) and c["text"].strip():
                                 parts.append(c["text"].strip())
+                            # {'type':'output_text','parts':['a','b']}
                             elif "parts" in c and isinstance(c["parts"], list):
                                 for p in c["parts"]:
                                     if isinstance(p, str) and p.strip():
                                         parts.append(p.strip())
+                # older shape: item.get('text')
                 if isinstance(item.get("text"), str) and item["text"].strip():
                     parts.append(item["text"].strip())
             if parts:
                 return "\n\n".join(parts)
 
+        # fallback to choices (chat/completions style)
         choices = payload.get("choices")
         if isinstance(choices, list) and choices:
             for ch in choices:
                 if isinstance(ch, dict):
+                    # chat completions style
                     message = ch.get("message") or ch.get("delta")
                     if isinstance(message, dict):
+                        # message content might be string or list
                         content = message.get("content")
                         if isinstance(content, str) and content.strip():
                             return content.strip()
                         if isinstance(content, list):
+                            # sometimes content is a list of dicts
                             for c in content:
                                 if isinstance(c, str) and c.strip():
                                     return c.strip()
                                 if isinstance(c, dict) and isinstance(c.get("text"), str) and c["text"].strip():
                                     return c["text"].strip()
+                    # older 'text' key
                     if isinstance(ch.get("text"), str) and ch["text"].strip():
                         return ch["text"].strip()
 
@@ -1617,35 +1652,37 @@ async def run_openai_completion(prompt):
                 }
 
                 payload = {
-                    "model": "gpt-5",     
-                    "input": prompt,             
-                    "max_output_tokens": 1200,     
-
+                    "model": "gpt-5",               # target GPT-5
+                    "input": prompt,                # Responses API prefers 'input'
+                    "max_output_tokens": 1200,       # adjust as needed
+                    # request minimal reasoning effort (correct nested form)
                     "reasoning": {"effort": "minimal"},
-
+                    # do NOT include unsupported params like temperature/modalities here
                 }
 
                 response = await client.post(url, json=payload, headers=headers)
-
+                # if server responds non-2xx, raise to trigger retry/logging
                 response.raise_for_status()
 
                 data = response.json()
 
+                # try to extract text robustly
                 reply = await _extract_text_from_responses(data)
                 if reply:
                     logger.info("run_openai_completion succeeded on attempt %d.", attempt)
                     return reply.strip()
                 else:
-
+                    # 200 but no usable text; log available keys for debugging
                     logger.error(
                         "Responses API returned 200 but no usable text. Keys: %s",
                         list(data.keys())
                     )
+                    # fall through to retry logic (subject to attempts left)
 
             except (httpx.TimeoutException, httpx.ConnectTimeout) as e:
                 logger.error("Attempt %d failed due to timeout: %s", attempt, e, exc_info=True)
             except httpx.HTTPStatusError as e:
-
+                # log body + status for 4xx/5xx responses to help debug parameter issues
                 body_text = None
                 try:
                     body_text = e.response.json()
