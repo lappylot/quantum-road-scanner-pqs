@@ -44,7 +44,7 @@ import itertools
 import os
 import itertools
 import numpy as np
-
+import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
