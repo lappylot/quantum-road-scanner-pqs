@@ -1542,11 +1542,6 @@ Please assess the following:
 
 async def run_openai_completion(prompt):
 
-    logger = logging.getLogger(__name__)
-
-    logger.debug("Entering run_openai_completion with prompt length: %d",
-                 len(prompt) if prompt else 0)
-
     max_retries = 5
     backoff_factor = 2
     delay = 1
