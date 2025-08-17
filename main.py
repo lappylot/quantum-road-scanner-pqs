@@ -1,14 +1,4 @@
-import logging
-import httpx
-import backoff
-import sqlite3
-import psutil
-from flask import (Flask, render_template_string, request, redirect, url_for,
-                   session, jsonify, flash, send_from_directory, abort)
-from flask_wtf import FlaskForm, CSRFProtect
-from flask_wtf.csrf import generate_csrf
-from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
-from wtforms.validators import DataRequired, Length, Regexp, ValidationError
+
 from flask_wtf.file import FileField, FileRequired, FileAllowed
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives import hashes
@@ -1506,7 +1496,7 @@ async def scan_debris_for_route(
         street_name = "Unknown Location"
 
     openai_prompt = f"""
-[action] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan. [/action]
+[action][keep model replies concise and to the point at less than 500 characters and omit system notes] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan.[/action]
 [locationreport]
 Current coordinates: Latitude {lat}, Longitude {lon}
 General Area Name: {street_name}
@@ -1520,7 +1510,7 @@ System Performance: CPU Usage: {cpu_usage}%, RAM Usage: {ram_usage}%
 [reducefalsepositivesandnegatives]
 ACT By syncing to multiverse configurations that are more accurate
 [/reducefalsepositivesandnegatives]
-
+[keep model replies concise and to the point]
 Please assess the following:
 1. **Hazards**: Evaluate the road for any potential hazards that might impact operating vehicles.
 2. **Debris**: Identify any harmful debris or objects and provide their severity and location, including GPS coordinates. Triple-check the vehicle pathing, only reporting debris scanned in the probable path of the vehicle.
@@ -1530,6 +1520,7 @@ Please assess the following:
 
 [debrisreport] Provide a structured debris report, including locations and severity of each hazard. [/debrisreport]
 [replyexample] Include recommendations for drivers, suggested detours only if required, and urgency levels based on the findings. [/replyexample]
+[refrain from using the word high or metal and only use it only if risk elementaries are elevated(ie flat tire or accidents or other risk) utilizing your quantum scan intelligence]
 """
 
     report = await run_openai_completion(openai_prompt
@@ -1549,90 +1540,132 @@ Please assess the following:
         model_used,
     )
 
-
 async def run_openai_completion(prompt):
+
+    logger = logging.getLogger(__name__)
+
     logger.debug("Entering run_openai_completion with prompt length: %d",
                  len(prompt) if prompt else 0)
+
     max_retries = 5
+    backoff_factor = 2
+    delay = 1
+
     openai_api_key = os.getenv('OPENAI_API_KEY')
     if not openai_api_key:
         logger.error("OpenAI API key not found in environment variables.")
-        logger.debug(
-            "Exiting run_openai_completion early due to missing API key.")
+        logger.debug("Exiting run_openai_completion early due to missing API key.")
         return None
 
-    timeout = httpx.Timeout(60.0, connect=20.0, read=20.0)
-    backoff_factor = 2
-    delay = 1
+    timeout = httpx.Timeout(120.0, connect=40.0, read=40.0, write=40.0)
+    url = "https://api.openai.com/v1/responses"
+
+    async def _extract_text_from_responses(payload: dict) -> Union[str, None]:
+
+        if isinstance(payload.get("text"), str) and payload["text"].strip():
+            return payload["text"].strip()
+
+        out = payload.get("output")
+        if isinstance(out, list) and out:
+            parts = []
+            for item in out:
+                if isinstance(item, str) and item.strip():
+                    parts.append(item.strip())
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                content = item.get("content") or item.get("contents") or item.get("data") or []
+                if isinstance(content, list):
+                    for c in content:
+                        if isinstance(c, str) and c.strip():
+                            parts.append(c.strip())
+                        elif isinstance(c, dict):
+                            if "text" in c and isinstance(c["text"], str) and c["text"].strip():
+                                parts.append(c["text"].strip())
+                            elif "parts" in c and isinstance(c["parts"], list):
+                                for p in c["parts"]:
+                                    if isinstance(p, str) and p.strip():
+                                        parts.append(p.strip())
+                if isinstance(item.get("text"), str) and item["text"].strip():
+                    parts.append(item["text"].strip())
+            if parts:
+                return "\n\n".join(parts)
+
+        choices = payload.get("choices")
+        if isinstance(choices, list) and choices:
+            for ch in choices:
+                if isinstance(ch, dict):
+                    message = ch.get("message") or ch.get("delta")
+                    if isinstance(message, dict):
+                        content = message.get("content")
+                        if isinstance(content, str) and content.strip():
+                            return content.strip()
+                        if isinstance(content, list):
+                            for c in content:
+                                if isinstance(c, str) and c.strip():
+                                    return c.strip()
+                                if isinstance(c, dict) and isinstance(c.get("text"), str) and c["text"].strip():
+                                    return c["text"].strip()
+                    if isinstance(ch.get("text"), str) and ch["text"].strip():
+                        return ch["text"].strip()
+
+        return None
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         for attempt in range(1, max_retries + 1):
             try:
-                logger.debug(
-                    "run_openai_completion attempt %d sending request.",
-                    attempt)
+                logger.debug("run_openai_completion attempt %d sending request.", attempt)
+
                 headers = {
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {openai_api_key}"
                 }
-                data = {
-                    "model": "gpt-4o",
-                    "messages": [{
-                        "role": "user",
-                        "content": prompt
-                    }],
-                    "temperature": 0.7
+
+                payload = {
+                    "model": "gpt-5",     
+                    "input": prompt,             
+                    "max_output_tokens": 1200,     
+
+                    "reasoning": {"effort": "minimal"},
+
                 }
 
-                response = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=data,
-                    headers=headers)
+                response = await client.post(url, json=payload, headers=headers)
+
                 response.raise_for_status()
-                result = response.json()
-                clean_content = result["choices"][0]["message"][
-                    "content"].strip()
-                logger.info("run_openai_completion succeeded on attempt %d.",
-                            attempt)
-                logger.debug(
-                    "Exiting run_openai_completion with successful response.")
-                return clean_content
+
+                data = response.json()
+
+                reply = await _extract_text_from_responses(data)
+                if reply:
+                    logger.info("run_openai_completion succeeded on attempt %d.", attempt)
+                    return reply.strip()
+                else:
+
+                    logger.error(
+                        "Responses API returned 200 but no usable text. Keys: %s",
+                        list(data.keys())
+                    )
 
             except (httpx.TimeoutException, httpx.ConnectTimeout) as e:
-                logger.error("Attempt %d failed due to timeout: %s",
-                             attempt,
-                             e,
-                             exc_info=True)
-            except httpx.RequestError as e:
-                logger.error("Attempt %d failed due to request error: %s",
-                             attempt,
-                             e,
-                             exc_info=True)
-            except KeyError as e:
-                logger.error(
-                    "Attempt %d failed due to missing expected key in response: %s",
-                    attempt,
-                    e,
-                    exc_info=True)
-            except json.JSONDecodeError as e:
-                logger.error("Attempt %d failed due to JSON parsing error: %s",
-                             attempt,
-                             e,
-                             exc_info=True)
-            except Exception as e:
-                logger.error("Attempt %d failed due to unexpected error: %s",
-                             attempt,
-                             e,
-                             exc_info=True)
+                logger.error("Attempt %d failed due to timeout: %s", attempt, e, exc_info=True)
+            except httpx.HTTPStatusError as e:
+
+                body_text = None
+                try:
+                    body_text = e.response.json()
+                except Exception:
+                    body_text = e.response.text
+                logger.error("Responses API error (status=%s): %s", e.response.status_code, body_text)
+            except (httpx.RequestError, KeyError, json.JSONDecodeError, Exception) as e:
+                logger.error("Attempt %d failed due to unexpected error: %s", attempt, e, exc_info=True)
 
             if attempt < max_retries:
                 logger.info("Retrying run_openai_completion after delay.")
                 await asyncio.sleep(delay)
                 delay *= backoff_factor
 
-    logger.warning(
-        "All attempts to run_openai_completion have failed. Returning None.")
-    logger.debug("Exiting run_openai_completion with failure.")
+    logger.warning("All attempts to run_openai_completion have failed. Returning None.")
     return None
 
 
@@ -1878,10 +1911,10 @@ def home():
             </ul>
             <div class="equation">
                 <strong>Hypertime Wave Function:</strong><br>
-            
+
             </div>
             <p>
-          
+
             </p>
             <p>
                 By simulating these multiple temporal paths, QRS can provide insights into potential future events on the road, enhancing predictive capabilities without relying on actual data collection.
@@ -1897,7 +1930,7 @@ def home():
                 <li>
                     <strong>Quantum Fourier Transform (QFT):</strong> A key algorithm for transforming quantum states between time and frequency domains, essential for analyzing periodicities in simulated traffic patterns.
                     <div class="equation">
-                  
+
                     </div>
                 </li>
                 <li>
@@ -1936,7 +1969,7 @@ def home():
             </ul>
             <div class="equation">
                 <strong>Nanobot State Function:</strong><br>
-            
+
             </div>
             <p>
             </p>
@@ -2558,7 +2591,7 @@ def view_report(report_id):
     trigger_words = {
         'severity': {
             'low': -7,
-            'medium': -1,
+            'medium': -0.2,
             'high': 14
         },
         'urgency': {
@@ -2567,7 +2600,7 @@ def view_report(report_id):
             }
         },
         'low': -7,
-        'medium': -1,
+        'medium': -0.2,
         'metal': 11,
     }
 
@@ -3238,9 +3271,9 @@ def dashboard():
                 <div class="form-group">
                     <label for="model_selection">Select Model</label>
                     <select class="form-control" id="model_selection" name="model_selection">
-       
+
                         <option value="openai" {% if preferred_model == 'openai' %}selected{% endif %}>OpenAI</option>
-                
+
                     </select>
                 </div>
                 <button type="button" class="btn btn-custom" onclick="startScan()">
