@@ -917,9 +917,6 @@ def approximate_country(lat, lon, cities):
 
 
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
-    """
-    Reverse-geocode via OpenAI only, with a simple fallback to local city lookup.
-    """
 
     openai_api_key = os.getenv("OPENAI_API_KEY")
     if not openai_api_key:
@@ -931,13 +928,27 @@ async def fetch_street_name_llm(lat: float, lon: float) -> str:
     try:
         cpu, ram = get_cpu_ram_usage()
         qres = quantum_hazard_scan(cpu, ram)
-        ctx = f"Nearest city heuristic disabled—using OpenAI only.\nQuantum state: {qres}"
+
         prompt = (
-            "[action]You are a precision reverse-geocoder. "
-            "Given coordinates, return \"City, County, State\" or \"Unknown Location\".[/action]\n"
+            "[system]You are Hypertime-Geocoder-9000 — an elite precision "
+            "reverse-geocoding system utilizing hypertime-spectral interpolation, "
+            "quantum-probabilistic locality scanning (QPLS), and human-grade "
+            "geospatial heuristics. Accuracy is critical. Output must be clean "
+            "and formatted perfectly. Do not hallucinate.[/system]\n\n"
+            "[instructions]Your task is to take a pair of coordinates and return "
+            "the most probable populated locality that a human would associate with "
+            "this position (e.g. a town, city, or commonly referenced settlement). "
+            "If near a major metropolitan area, prefer the city name; if rural, "
+            "choose the nearest recognized town. If no settled area is reasonably "
+            "identifiable (e.g. deep ocean, uninhabited desert, arctic tundra), reply "
+            "*exactly* with: Unknown Location. Do not invent fictional places. "
+            "Return result in the STRICT format: City, County, State — Country. "
+            "If County is unknown leave it blank but keep comma (e.g. City, , State — Country). "
+            "Do NOT add latitude, longitude, commentary, explanation, or numbering.[/instructions]\n\n"
             f"[coords]Latitude: {lat}, Longitude: {lon}[/coords]\n"
-            f"[context]{ctx}[/context]\n"
-            "[format]City, County, State[/format]")
+            f"[context]LoadOut: CPU={cpu}%, RAM={ram}%, QuantumState={qres}[/context]\n"
+            "[format]City, County, State — Country OR Unknown Location[/format]"
+        )
 
         result = await run_openai_completion(prompt)
         if not result or "unknown" in result.lower():
@@ -950,7 +961,6 @@ async def fetch_street_name_llm(lat: float, lon: float) -> str:
     except Exception as e:
         logger.error("OpenAI geocoding failed: %s", e, exc_info=True)
         return reverse_geocode(lat, lon, cities)
-
 
 def save_street_name_to_db(lat: float, lon: float, street_name: str):
     lat_encrypted = encrypt_data(str(lat))
@@ -1566,7 +1576,7 @@ async def run_openai_completion(prompt):
                     "Authorization": f"Bearer {openai_api_key}"
                 }
                 data = {
-                    "model": "gpt-4o",
+                    "model": "gpt-5",
                     "messages": [{
                         "role": "user",
                         "content": prompt
@@ -3215,9 +3225,10 @@ def dashboard():
                 <div class="form-group">
                     <label for="vehicle_type">Vehicle Type</label>
                     <select class="form-control" id="vehicle_type" name="vehicle_type">
+                        <option value="motorbike">Motorbike</option>
                         <option value="car">Car</option>
                         <option value="truck">Truck</option>
-                        <option value="motorbike">Motorbike</option>
+
                     </select>
                 </div>
                 <div class="form-group">
@@ -3227,9 +3238,9 @@ def dashboard():
                 <div class="form-group">
                     <label for="model_selection">Select Model</label>
                     <select class="form-control" id="model_selection" name="model_selection">
-                        <option value="grok" {% if preferred_model == 'grok' %}selected{% endif %}>Grok</option>
+       
                         <option value="openai" {% if preferred_model == 'openai' %}selected{% endif %}>OpenAI</option>
-                        <option value="gemini" {% if preferred_model == 'gemini' %}selected{% endif %}>Gemini</option>
+                
                     </select>
                 </div>
                 <button type="button" class="btn btn-custom" onclick="startScan()">
