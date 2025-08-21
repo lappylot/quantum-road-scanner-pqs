@@ -1,17 +1,15 @@
+from __future__ import annotations 
 import logging
 import httpx
-import backoff
 import sqlite3
 import psutil
 from flask import (Flask, render_template_string, request, redirect, url_for,
-                   session, jsonify, flash, send_from_directory, abort)
+                   session, jsonify, flash)
 from flask_wtf import FlaskForm, CSRFProtect
 from flask_wtf.csrf import generate_csrf
 from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
-from wtforms.validators import DataRequired, Length, Regexp, ValidationError
-from flask_wtf.file import FileField, FileRequired, FileAllowed
+from wtforms.validators import DataRequired, Length
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.backends import default_backend
 from waitress import serve
@@ -26,24 +24,19 @@ import random
 import re
 import base64
 import math
-import binascii
 import threading
 import time
 import hmac
 import hashlib
 import secrets
-from typing import Tuple, Callable, Dict, List, Union, Any, Optional, Mapping
+from typing import Tuple, Callable, Dict, List, Union, Any, Optional, Mapping, cast
 import uuid
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-import textwrap
-import io
 import sys
 import pennylane as qml
 import numpy as np
 from pathlib import Path
 import os
-from statistics import mean
 import json
 import string
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -52,20 +45,43 @@ from argon2.low_level import hash_secret_raw, Type as ArgonType
 from numpy.random import Generator, PCG64DXSM
 import itertools
 import colorsys
-from pathlib import Path
 from dataclasses import dataclass
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519, ed25519
-
-# Optional PQ (Open Quantum Safe)
+from collections import deque
+from flask.sessions import SecureCookieSessionInterface
+from flask.json.tag  import TaggedJSONSerializer
+from itsdangerous import URLSafeTimedSerializer, BadSignature, BadTimeSignature
+import zlib as _zlib 
+from dataclasses import dataclass
 try:
-    import oqs  # pip install oqs-python
+    import zstandard as zstd  
+    _HAS_ZSTD = True
 except Exception:
-    oqs = None
+    zstd = None  
+    _HAS_ZSTD = False
+    
+try:
+    from typing import TypedDict
+except ImportError:
+    from typing_extensions import TypedDict
+
+try:
+    import oqs as _oqs  
+    oqs = cast(Any, _oqs)  
+except Exception:
+    oqs = cast(Any, None)
+
+class SealedCache(TypedDict, total=False):
+    x25519_priv_raw: bytes
+    pq_priv_raw: Optional[bytes]
+    sig_priv_raw: bytes
+    kem_alg: str
+    sig_alg: str
     
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
+STRICT_PQ2_ONLY = True
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(logging.INFO)
 
@@ -117,7 +133,6 @@ if 'parse_safe_float' not in globals():
             raise ValueError("Non-finite float not allowed")
         return f
 
-
 if 'IDENTIFIER_RE' not in globals():
     IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
@@ -145,8 +160,6 @@ def _chaotic_three_fry_mix(buf: bytes) -> bytes:
         words[3] = ((words[3] << 16) | (words[3] >> 48)) & 0xffffffffffffffff
         words[3] ^= words[2]
     return struct.pack('>4Q', *words)
-
-
 
 def validate_password_strength(password):
     if len(password) < 8:
@@ -219,17 +232,98 @@ def get_very_complex_random_interval():
     jitter = int((c * r * 13 + cw * 7 + rng) % 311)
     return base + jitter
 
+RECENT_KEYS = deque(maxlen=5) 
+
+def _get_all_secret_keys():
+
+    current = getattr(app, "secret_key", None)
+    others = [k for k in list(RECENT_KEYS) if k is not current and k is not None]
+    return [current] + others if current else others
+
+class MultiKeySessionInterface(SecureCookieSessionInterface):
+    serializer = TaggedJSONSerializer()
+
+    def _make_serializer(self, secret_key):
+        if not secret_key:
+            return None
+        signer_kwargs = dict(key_derivation=self.key_derivation,
+                             digest_method=self.digest_method)
+        return URLSafeTimedSerializer(secret_key, salt=self.salt,
+                                      serializer=self.serializer,
+                                      signer_kwargs=signer_kwargs)
+
+    def open_session(self, app, request):
+        cookie_name = self.get_cookie_name(app)  
+        s = request.cookies.get(cookie_name)
+        if not s:
+            return self.session_class()
+
+        max_age = int(app.permanent_session_lifetime.total_seconds())
+        for key in _get_all_secret_keys():
+            ser = self._make_serializer(key)
+            if not ser:
+                continue
+            try:
+                data = ser.loads(s, max_age=max_age)
+                return self.session_class(data)
+            except (BadTimeSignature, BadSignature, Exception):
+                continue
+        return self.session_class()
+
+    def save_session(self, app, session, response):
+        key = getattr(app, "secret_key", None)
+        ser = self._make_serializer(key)
+        if not ser:
+            return
+
+        cookie_name = self.get_cookie_name(app) 
+        domain = self.get_cookie_domain(app)
+        path = self.get_cookie_path(app)
+
+        if not session:
+            if session.modified:
+                response.delete_cookie(
+                    cookie_name,
+                    domain=domain,
+                    path=path,
+                    secure=self.get_cookie_secure(app),
+                    samesite=self.get_cookie_samesite(app),
+                )
+            return
+
+        httponly = self.get_cookie_httponly(app)
+        secure = self.get_cookie_secure(app)
+        samesite = self.get_cookie_samesite(app)
+        expires = self.get_expiration_time(app, session)
+
+        val = ser.dumps(dict(session))
+        response.set_cookie(
+            cookie_name,           
+            val,
+            expires=expires,
+            httponly=httponly,
+            domain=domain,
+            path=path,
+            secure=secure,
+            samesite=samesite,
+        )
+
+        
+app.session_interface = MultiKeySessionInterface()
 
 def rotate_secret_key():
     lock = threading.Lock()
     while True:
         with lock:
             sk = generate_very_strong_secret_key()
+       
+            prev = getattr(app, "secret_key", None)
+            if prev:
+                RECENT_KEYS.appendleft(prev)
             app.secret_key = sk
             fp = base64.b16encode(sk[:6]).decode()
             logger.info(f"Secret key rotated (fp={fp})")
         time.sleep(get_very_complex_random_interval())
-
 
 BASE_DIR = Path(__file__).parent.resolve()
 
@@ -251,7 +345,6 @@ app.config.update(SESSION_COOKIE_SECURE=True,
 
 csrf = CSRFProtect(app)
 
-
 @app.after_request
 def apply_csp(response):
     csp_policy = ("default-src 'self'; "
@@ -267,6 +360,31 @@ def apply_csp(response):
 
 class KeyManager:
 
+    encryption_key: Optional[bytes]
+    passphrase_env_var: str
+    salt_file_path: Path
+    backend: Any
+    _pq_alg_name: Optional[str] = None
+    x25519_pub: bytes = b""
+    _x25519_priv_enc: bytes = b""
+    pq_pub: Optional[bytes] = None
+    _pq_priv_enc: Optional[bytes] = None
+    sig_alg_name: Optional[str] = None
+    sig_pub: Optional[bytes] = None
+    _sig_priv_enc: Optional[bytes] = None
+    hybrid_dir: Path = Path("./pq_hybrid_keys")
+    sig_dir: Path = Path("./pq_sign_keys")
+    sealed_store: Optional["SealedStore"] = None
+
+    def _oqs_kem_name(self) -> Optional[str]: ...
+    def _load_or_create_hybrid_keys(self) -> None: ...
+    def _decrypt_x25519_priv(self) -> x25519.X25519PrivateKey: ...
+    def _decrypt_pq_priv(self) -> Optional[bytes]: ...
+    def _load_or_create_signing(self) -> None: ...
+    def _decrypt_sig_priv(self) -> bytes: ...
+    def sign_blob(self, data: bytes) -> bytes: ...
+    def verify_blob(self, pub: bytes, sig_bytes: bytes, data: bytes) -> bool: ...
+
     def __init__(self,
                  passphrase_env_var='ENCRYPTION_PASSPHRASE',
                  salt_file_path='./encryption_salt_key.key'):
@@ -274,6 +392,22 @@ class KeyManager:
         self.passphrase_env_var = passphrase_env_var
         self.salt_file_path = Path(salt_file_path)
         self.backend = default_backend()
+        self._sealed_cache: Optional[SealedCache] = None      
+        self._sealed_store: Optional["SealedStore"] = None    
+        self._load_encryption_key()
+        self._sealed_cache = None
+        self._pq_alg_name = None
+        self.x25519_pub = b""
+        self._x25519_priv_enc = b""
+        self.pq_pub = None
+        self._pq_priv_enc = None
+        self.sig_alg_name = None
+        self.sig_pub = None
+        self._sig_priv_enc = None
+        self.hybrid_dir = Path("./pq_hybrid_keys")
+        self.sig_dir = Path("./pq_sign_keys")
+        self.sealed_store = None
+
         self._load_encryption_key()
 
     def _load_encryption_key(self):
@@ -324,28 +458,20 @@ class KeyManager:
             raise ValueError("Encryption key is not initialized.")
         return self.encryption_key
 
-# ---------- Constants ----------
 MAGIC_PQ2_PREFIX = "PQ2."
-HYBRID_ALG_ID    = "HY1"   # ML-KEM-768 ⊕ X25519 (HKDF-SHA3)
+HYBRID_ALG_ID    = "HY1"  
 WRAP_INFO        = b"QRS|hybrid-wrap|v1"
 DATA_INFO        = b"QRS|data-aesgcm|v1"
 
-# Compression & envelope cap
-try:
-    import zstandard as zstd
-    _HAS_ZSTD = True
-except Exception:
-    import zlib as _zlib
-    _HAS_ZSTD = False
 
-COMPRESS_MIN   = int(os.getenv("QRS_COMPRESS_MIN", "512"))      # bytes
-ENV_CAP_BYTES  = int(os.getenv("QRS_ENV_CAP_BYTES", "131072"))  # 128 KiB
+COMPRESS_MIN   = int(os.getenv("QRS_COMPRESS_MIN", "512"))    
+ENV_CAP_BYTES  = int(os.getenv("QRS_ENV_CAP_BYTES", "131072"))  
 
-# Policy
+
 POLICY = {
     "min_env_version": "QRS2",
     "require_sig_on_pq2": True,
-    "require_pq_if_available": False,  # set True to hard-reject X25519-only if ML-KEM is present
+    "require_pq_if_available": False, 
 }
 
 SIG_ALG_IDS = {
@@ -356,7 +482,7 @@ SIG_ALG_IDS = {
     "Ed25519": ("Ed25519", "ED25"),
 }
 
-# ---------- Helpers ----------
+
 def b64e(b: bytes) -> str: return base64.b64encode(b).decode("utf-8")
 def b64d(s: str) -> bytes: return base64.b64decode(s.encode("utf-8"))
 
@@ -373,10 +499,10 @@ def _fp8(data: bytes) -> str:
 def _compress_payload(data: bytes) -> tuple[str, bytes, int]:
     if len(data) < COMPRESS_MIN:
         return ("none", data, len(data))
-    if _HAS_ZSTD:
+    if _HAS_ZSTD and zstd is not None:
         c = zstd.ZstdCompressor(level=8).compress(data); alg = "zstd"
     else:
-        c = _zlib.compress(data, 7);                       alg = "deflate"
+        c = _zlib.compress(data, 7);                      alg = "deflate"
     if len(c) >= int(0.98 * len(data)):
         return ("none", data, len(data))
     return (alg, c, len(data))
@@ -384,14 +510,13 @@ def _compress_payload(data: bytes) -> tuple[str, bytes, int]:
 def _decompress_payload(alg: str, blob: bytes, orig_len: Optional[int] = None) -> bytes:
     if alg in (None, "", "none"):
         return blob
-    if alg == "zstd" and _HAS_ZSTD:
+    if alg == "zstd" and _HAS_ZSTD and zstd is not None:
         max_out = (orig_len or (len(blob) * 80) + 1)
         return zstd.ZstdDecompressor().decompress(blob, max_output_size=max_out)
-    if alg == "deflate" and not _HAS_ZSTD:
+    if alg == "deflate":
         return _zlib.decompress(blob)
     raise ValueError("Unsupported compression algorithm")
 
-# ---------- ColorSync (entropic) ----------
 QID25 = [
     ("A1","Crimson","#d7263d"), ("A2","Magenta","#ff2e88"), ("A3","Fuchsia","#cc2fcb"),
     ("A4","Royal","#5b2a86"),  ("A5","Indigo","#4332cf"), ("B1","Azure","#1f7ae0"),
@@ -407,91 +532,165 @@ def _hex_to_rgb01(h):
     h = h.lstrip("#"); return (int(h[0:2],16)/255.0, int(h[2:4],16)/255.0, int(h[4:6],16)/255.0)
 def _rgb01_to_hex(r,g,b):
     return "#{:02x}{:02x}{:02x}".format(int(max(0,min(1,r))*255),int(max(0,min(1,g))*255),int(max(0,min(1,b))*255))
-def _approx_oklch_from_rgb(r,g,b):
-    h,l,s = colorsys.rgb_to_hls(r,g,b)
-    L = 0.6*l + 0.4*(0.2126*r+0.7152*g+0.0722*b); C = s*0.37; H = (h*360.0)%360.0
-    return (round(L,4), round(C,4), round(H,2))
+    
+def _approx_oklch_from_rgb(r: float, g: float, b: float) -> tuple[float, float, float]:
+
+   
+    r = 0.0 if r < 0.0 else 1.0 if r > 1.0 else r
+    g = 0.0 if g < 0.0 else 1.0 if g > 1.0 else g
+    b = 0.0 if b < 0.0 else 1.0 if b > 1.0 else b
+
+    hue_hls, light_hls, sat_hls = colorsys.rgb_to_hls(r, g, b)
+
+
+    luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+ 
+    L = 0.6 * light_hls + 0.4 * luma
+
+ 
+    C = sat_hls * 0.37
+
+   
+    H = (hue_hls * 360.0) % 360.0
+
+    return (round(L, 4), round(C, 4), round(H, 2))
+
 
 class ColorSync:
-    def __init__(self): self._epoch = secrets.token_bytes(16)
+    def __init__(self) -> None:
+        self._epoch = secrets.token_bytes(16)
+
     def sample(self) -> dict:
-        try: cpu, ram = get_cpu_ram_usage()
-        except Exception: cpu, ram = 0.0, 0.0
-        pool = b"|".join([
-            secrets.token_bytes(32), os.urandom(32), uuid.uuid4().bytes,
+        try:
+            cpu, ram = get_cpu_ram_usage()
+        except Exception:
+            cpu, ram = 0.0, 0.0
+
+        pool_parts = [
+            secrets.token_bytes(32),
+            os.urandom(32),
+            uuid.uuid4().bytes,
             str((time.time_ns(), time.perf_counter_ns())).encode(),
-            f"{os.getpid()}:{os.getppid()}:{threading.get_ident()}".encode(), 
-            int(cpu*100).to_bytes(2,"big"), int(ram*100).to_bytes(2,"big"), self._epoch
-        ])
+            f"{os.getpid()}:{os.getppid()}:{threading.get_ident()}".encode(),
+            int(cpu * 100).to_bytes(2, "big"),
+            int(ram * 100).to_bytes(2, "big"),
+            self._epoch,
+        ]
+        pool = b"|".join(pool_parts)
+
         h = hashlib.sha3_512(pool).digest()
-        hue = int.from_bytes(h[0:2],"big")/65535.0
-        sat = min(1.0, 0.35 + (cpu/100.0)*0.6)
-        lig = min(1.0, 0.35 + (1.0-(ram/100.0))*0.55)
-        r,g,b = colorsys.hls_to_rgb(hue, lig, sat)
-        hexc = _rgb01_to_hex(r,g,b)
-        L,C,H = _approx_oklch_from_rgb(r,g,b)
-        best = None; best_d = 9e9
-        for code,name,hexq in QID25:
-            rq,gq,bq = _hex_to_rgb01(hexq); hq,lq,sq = colorsys.rgb_to_hls(rq,gq,bq)
-            d = abs(hq-hue)+abs(lq-lig)+abs(sq-sat)
-            if d<best_d: best_d, best = d, (code,name,hexq)
+        hue = int.from_bytes(h[0:2], "big") / 65535.0
+        sat = min(1.0, 0.35 + (cpu / 100.0) * 0.6)
+        lig = min(1.0, 0.35 + (1.0 - (ram / 100.0)) * 0.55)
+
+        r, g, b = colorsys.hls_to_rgb(hue, lig, sat)
+        hexc = _rgb01_to_hex(r, g, b)
+        L, C, H = _approx_oklch_from_rgb(r, g, b)
+
+        best = None
+        best_d = float("inf")
+        for code, name, hexq in QID25:
+            rq, gq, bq = _hex_to_rgb01(hexq)
+            hq, lq, sq = colorsys.rgb_to_hls(rq, gq, bq)
+            d = abs(hq - hue) + abs(lq - lig) + abs(sq - sat)
+            if d < best_d:
+                best_d = d
+                best = (code, name, hexq)
+
+        if best is None:
+            best = ("", "", hexc)
+
         return {
-            "entropy_norm": 1.0,  # SHA3_512 => ~8 bits/byte; we keep it simple for display
-            "hsl": {"h": round(hue*360.0,2), "s": round(sat,3), "l": round(lig,3)},
+            "entropy_norm": 1.0,
+            "hsl": {"h": round(hue * 360.0, 2), "s": round(sat, 3), "l": round(lig, 3)},
             "oklch": {"L": L, "C": C, "H": H},
             "hex": hexc,
             "qid25": {"code": best[0], "name": best[1], "hex": best[2]},
-            "epoch": base64.b16encode(self._epoch[:6]).decode()
+            "epoch": base64.b16encode(self._epoch[:6]).decode(),
         }
-    def bump_epoch(self):
-        self._epoch = hashlib.blake2b(self._epoch + os.urandom(16), digest_size=16).digest()
+
+    def bump_epoch(self) -> None:
+        self._epoch = hashlib.blake2b(
+            self._epoch + os.urandom(16), digest_size=16
+        ).digest()
+
 
 colorsync = ColorSync()
 
-# ---------- Shamir (t-of-n) over GF(256) for split KEK (compact) ----------
+
 def _gf256_mul(a: int, b: int) -> int:
     p = 0
     for _ in range(8):
-        if b & 1: p ^= a
-        hi = a & 0x80; a = ((a << 1) & 0xFF); 
-        if hi: a ^= 0x1B
+        if b & 1:
+            p ^= a
+        hi = a & 0x80
+        a = (a << 1) & 0xFF
+        if hi:
+            a ^= 0x1B
         b >>= 1
     return p
+
+
 def _gf256_pow(a: int, e: int) -> int:
     x = 1
     while e:
-        if e & 1: x = _gf256_mul(x, a)
-        a = _gf256_mul(a, a); e >>= 1
+        if e & 1:
+            x = _gf256_mul(x, a)
+        a = _gf256_mul(a, a)
+        e >>= 1
     return x
+
+
 def _gf256_inv(a: int) -> int:
-    if a == 0: raise ZeroDivisionError
+    if a == 0:
+        raise ZeroDivisionError
     return _gf256_pow(a, 254)
+
+
 def shamir_recover(shares: list[tuple[int, bytes]], t: int) -> bytes:
-    if len(shares) < t: raise ValueError("not enough shares")
-    L = len(shares[0][1]); parts = shares[:t]
-    out = bytearray(L)
-    for i in range(L):
+    if len(shares) < t:
+        raise ValueError("not enough shares")
+
+    length = len(shares[0][1])
+    parts = shares[:t]
+    out = bytearray(length)
+
+    for i in range(length):
         val = 0
-        for j,(xj,yj) in enumerate(parts):
-            num = 1; den = 1
-            for m,(xm,_) in enumerate(parts):
-                if m==j: continue
-                num = _gf256_mul(num, xm); den = _gf256_mul(den, xj ^ xm)
+        for j, (xj, yj) in enumerate(parts):
+            num = 1
+            den = 1
+            for m, (xm, _) in enumerate(parts):
+                if m == j:
+                    continue
+                num = _gf256_mul(num, xm)
+                den = _gf256_mul(den, xj ^ xm)
             lj0 = _gf256_mul(num, _gf256_inv(den))
             val ^= _gf256_mul(yj[i], lj0)
         out[i] = val
+
     return bytes(out)
 
-# ---------- Sealed store ----------
+
 SEALED_DIR   = Path("./sealed_store")
 SEALED_FILE  = SEALED_DIR / "sealed.json.enc"
 SEALED_VER   = "SS1"
 SHARDS_ENV   = "QRS_SHARDS_JSON"
 
-@dataclass
+
+
+@dataclass(frozen=True, slots=True)   
 class SealedRecord:
-    v: str; created_at: int; kek_ver: int; kem_alg: str; sig_alg: str
-    x25519_priv: str; pq_priv: str; sig_priv: str
+    v: str
+    created_at: int
+    kek_ver: int
+    kem_alg: str
+    sig_alg: str
+    x25519_priv: str
+    pq_priv: str
+    sig_priv: str
+
 
 class SealedStore:
     def __init__(self, km: "KeyManager"):
@@ -537,118 +736,243 @@ class SealedStore:
             SEALED_FILE.write_bytes(self._seal(split_kek, rec)); SEALED_FILE.chmod(0o600)
         except Exception as e:
             logger.error(f"Sealed save failed: {e}", exc_info=True)
+    
     def load_into_km(self) -> bool:
         try:
             passphrase = os.getenv(self.km.passphrase_env_var) or ""
             salt = self.km.salt_file_path.read_bytes()
-            base_kek = hash_secret_raw(passphrase.encode(), salt, 3, 512*1024, max(2,(os.cpu_count() or 2)//2), 32, ArgonType.ID)
+            base_kek = hash_secret_raw(
+                passphrase.encode(), salt,
+                3, 512*1024, max(2, (os.cpu_count() or 2)//2), 32, ArgonType.ID
+            )
             split_kek = self._derive_split_kek(base_kek)
             rec = self._unseal(split_kek, SEALED_FILE.read_bytes())
-            self.km._sealed_cache = {
+
+            cache: SealedCache = {
                 "x25519_priv_raw": b64d(rec["x25519_priv"]),
-                "pq_priv_raw": b64d(rec["pq_priv"]) if rec.get("pq_priv") else None,
+                "pq_priv_raw": (b64d(rec["pq_priv"]) if rec.get("pq_priv") else None),
                 "sig_priv_raw": b64d(rec["sig_priv"]),
-                "kem_alg": rec.get("kem_alg",""), "sig_alg": rec.get("sig_alg","")
-            }
+                "kem_alg": rec.get("kem_alg", ""),
+                "sig_alg": rec.get("sig_alg", ""),
+         }
+
+            self.km._sealed_cache = cache
+            if cache.get("kem_alg"):
+                self.km._pq_alg_name = cache["kem_alg"] or None
+            if cache.get("sig_alg"):
+                self.km.sig_alg_name = cache["sig_alg"] or self.km.sig_alg_name
+
             return True
         except Exception as e:
             logger.error(f"Sealed load failed: {e}")
             return False
 
-# ---------- Extend KeyManager with hybrid KEM + signatures ----------
-# (patching your existing class by adding methods/fields when constructed)
-KeyManager._oqs_kem_name = lambda self: (None if oqs is None else next((n for n in ("ML-KEM-768","Kyber768","FIPS204-ML-KEM-768") if _try(lambda: oqs.KeyEncapsulation(n))), None))
-def _try(f):
-    try: f(); return True
-    except Exception: return False
+def _km_oqs_kem_name(self) -> Optional[str]:
+    if oqs is None:
+        return None
+    oqs_mod = cast(Any, oqs)
+    for n in ("ML-KEM-768","Kyber768","FIPS204-ML-KEM-768"):
+        try:
+            oqs_mod.KeyEncapsulation(n)
+            return n
+        except Exception:
+            continue
+    return None
 
-def _km_load_or_create_hybrid_keys(self: "KeyManager"):
+_KM = cast(Any, KeyManager)
+_KM._oqs_kem_name = _km_oqs_kem_name  
+
+
+def _try(f: Callable[[], Any]) -> bool:
+    try:
+        f()
+        return True
+    except Exception:
+        return False
+        
+
+STRICT_PQ2_ONLY = bool(int(os.getenv("STRICT_PQ2_ONLY", "1")))
+
+def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
     passphrase = os.getenv(self.passphrase_env_var)
-    if not passphrase: raise ValueError(f"No {self.passphrase_env_var} set")
+    if not passphrase:
+        raise ValueError(f"No {self.passphrase_env_var} set")
+
     salt = self.salt_file_path.read_bytes()
-    kek = hash_secret_raw(passphrase.encode("utf-8"), salt, 3, 512*1024, max(2,(os.cpu_count() or 2)//2), 32, ArgonType.ID)
+    kek = hash_secret_raw(
+        passphrase.encode("utf-8"),
+        salt,
+        time_cost=3,
+        memory_cost=512 * 1024,
+        parallelism=max(2, (os.cpu_count() or 2) // 2),
+        hash_len=32,
+        type=ArgonType.ID,
+    )
     aes = AESGCM(kek)
-    self.hybrid_dir = Path("./pq_hybrid_keys"); self.hybrid_dir.mkdir(parents=True, exist_ok=True)
-    # X25519
+
+    self.hybrid_dir = Path("./pq_hybrid_keys")
+    self.hybrid_dir.mkdir(parents=True, exist_ok=True)
+
     x_pub_path  = self.hybrid_dir / "x25519_pub.bin"
     x_priv_path = self.hybrid_dir / "x25519_priv.bin.enc"
+
     if x_pub_path.exists() and x_priv_path.exists():
-        self.x25519_pub = x_pub_path.read_bytes(); self._x25519_priv_enc = x_priv_path.read_bytes()
+        self.x25519_pub = x_pub_path.read_bytes()
+        self._x25519_priv_enc = x_priv_path.read_bytes()
     else:
         x_priv = x25519.X25519PrivateKey.generate()
-        x_pub  = x_priv.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        x_pub = x_priv.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
         n = secrets.token_bytes(12)
-        x_priv_raw = x_priv.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
+        x_priv_raw = x_priv.private_bytes(
+            serialization.Encoding.Raw,
+            serialization.PrivateFormat.Raw,
+            serialization.NoEncryption(),
+        )
         x_priv_enc = n + aes.encrypt(n, x_priv_raw, b"x25519")
-        x_pub_path.write_bytes(x_pub); x_priv_path.write_bytes(x_priv_enc)
-        self.x25519_pub = x_pub; self._x25519_priv_enc = x_priv_enc
-    # PQ KEM
+
+        x_pub_path.write_bytes(x_pub)
+        x_priv_path.write_bytes(x_priv_enc)
+        try:
+            x_pub_path.chmod(0o600)
+            x_priv_path.chmod(0o600)
+        except Exception:
+            pass
+
+        self.x25519_pub = x_pub
+        self._x25519_priv_enc = x_priv_enc
+
+    
     self._pq_alg_name = None
-    try_name = self._oqs_kem_name()
+    self.pq_pub = None
+    self._pq_priv_enc = None
+
+    try_name = _km_oqs_kem_name(self)
     pq_pub_path  = self.hybrid_dir / "pq_pub.bin"
     pq_priv_path = self.hybrid_dir / "pq_priv.bin.enc"
+
     if try_name:
         self._pq_alg_name = try_name
         if pq_pub_path.exists() and pq_priv_path.exists():
-            self.pq_pub = pq_pub_path.read_bytes(); self._pq_priv_enc = pq_priv_path.read_bytes()
+            self.pq_pub = pq_pub_path.read_bytes()
+            self._pq_priv_enc = pq_priv_path.read_bytes()
         else:
-            with oqs.KeyEncapsulation(try_name) as kem:
-                pub = kem.generate_keypair(); sk = kem.export_secret_key()
-            n = secrets.token_bytes(12)
-            pq_priv_enc = n + aes.encrypt(n, sk, b"pqkem")
-            pq_pub_path.write_bytes(pub); pq_priv_path.write_bytes(pq_priv_enc)
-            self.pq_pub = pub; self._pq_priv_enc = pq_priv_enc
+            if oqs is None:
+                logger.warning("liboqs unavailable; skipping PQ KEM key generation")
+                self._pq_alg_name = None
+            else:
+                try:
+                    oqs_mod = cast(Any, oqs)
+                    with oqs_mod.KeyEncapsulation(try_name) as kem:
+                        pub = kem.generate_keypair()
+                        sk = kem.export_secret_key()
+
+                    n = secrets.token_bytes(12)
+                    pq_priv_enc = n + aes.encrypt(n, sk, b"pqkem")
+
+                    pq_pub_path.write_bytes(pub)
+                    pq_priv_path.write_bytes(pq_priv_enc)
+                    try:
+                        pq_pub_path.chmod(0o600)
+                        pq_priv_path.chmod(0o600)
+                    except Exception:
+                        pass
+
+                    self.pq_pub = pub
+                    self._pq_priv_enc = pq_priv_enc
+                except Exception as e:
+                    logger.error(f"PQ KEM key generation failed: {e}", exc_info=True)
+                    self._pq_alg_name = None
+                    self.pq_pub = None
+                    self._pq_priv_enc = None
+
+
+    if STRICT_PQ2_ONLY and (
+        self._pq_alg_name is None or self.pq_pub is None or self._pq_priv_enc is None
+    ):
+        raise RuntimeError(
+            "Strict PQ2 mode: ML-KEM unavailable; ensure liboqs is installed and accessible."
+        )
+        
 
 def _km_decrypt_x25519_priv(self: "KeyManager") -> x25519.X25519PrivateKey:
-    if getattr(self, "_sealed_cache", None) and self._sealed_cache.get("x25519_priv_raw"):
-        raw = self._sealed_cache["x25519_priv_raw"]
+    cache = self._sealed_cache
+    if cache is not None and "x25519_priv_raw" in cache:
+        raw = cache["x25519_priv_raw"] 
         return x25519.X25519PrivateKey.from_private_bytes(raw)
+
+    x_enc = cast(bytes, getattr(self, "_x25519_priv_enc"))  
     passphrase = os.getenv(self.passphrase_env_var) or ""
     salt = self.salt_file_path.read_bytes()
-    kek = hash_secret_raw(passphrase.encode(), salt, 3, 512*1024, max(2,(os.cpu_count() or 2)//2), 32, ArgonType.ID)
-    aes = AESGCM(kek); n, ct = self._x25519_priv_enc[:12], self._x25519_priv_enc[12:]
+    kek = hash_secret_raw(passphrase.encode(), salt, 3, 512*1024, max(2, (os.cpu_count() or 2)//2), 32, ArgonType.ID)
+    aes = AESGCM(kek)
+    n, ct = x_enc[:12], x_enc[12:]
     raw = aes.decrypt(n, ct, b"x25519")
     return x25519.X25519PrivateKey.from_private_bytes(raw)
 
 def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
-    if getattr(self, "_sealed_cache", None):
-        return self._sealed_cache.get("pq_priv_raw")
-    if not (getattr(self, "_pq_alg_name", None) and getattr(self, "_pq_priv_enc", None)): return None
+    cache = getattr(self, "_sealed_cache", None)
+    if cache is not None:
+        return cache.get("pq_priv_raw")
+    if not (getattr(self, "_pq_alg_name", None) and getattr(self, "_pq_priv_enc", None)):
+        return None
+    
+    pq_alg = cast(Optional[str], getattr(self, "_pq_alg_name", None))
+    pq_enc = cast(Optional[bytes], getattr(self, "_pq_priv_enc", None))
+    if not (pq_alg and pq_enc):
+        return None 
+
     passphrase = os.getenv(self.passphrase_env_var) or ""
     salt = self.salt_file_path.read_bytes()
-    kek = hash_secret_raw(passphrase.encode(), salt, 3, 512*1024, max(2,(os.cpu_count() or 2)//2), 32, ArgonType.ID)
-    aes = AESGCM(kek); n, ct = self._pq_priv_enc[:12], self._pq_priv_enc[12:]
-    return aes.decrypt(n, ct, b"pqkem")
+    kek = hash_secret_raw(passphrase.encode(), salt, 3, 512*1024, max(2, (os.cpu_count() or 2)//2), 32, ArgonType.ID)
+    aes = AESGCM(kek)
 
-# Signatures
+    n, ct = pq_enc[:12], pq_enc[12:]
+    return aes.decrypt(n, ct, b"pqkem")
+    
 def _oqs_sig_name() -> Optional[str]:
-    if oqs is None: return None
+    if oqs is None:
+        return None
+    oqs_mod = cast(Any, oqs)
     for name in ("ML-DSA-87","ML-DSA-65","Dilithium5","Dilithium3"):
-        try: oqs.Signature(name); return name
-        except Exception: continue
+        try:
+            oqs_mod.Signature(name)
+            return name
+        except Exception:
+            continue
     return None
+
 
 def _km_load_or_create_signing(self: "KeyManager"):
     passphrase = os.getenv(self.passphrase_env_var) or ""
     salt = self.salt_file_path.read_bytes()
-    kek = hash_secret_raw(passphrase.encode(), salt, 3, 512*1024, max(2,(os.cpu_count() or 2)//2), 32, ArgonType.ID)
+    kek = hash_secret_raw(passphrase.encode(), salt, 3, 512*1024, max(2, (os.cpu_count() or 2)//2), 32, ArgonType.ID)
     aes = AESGCM(kek)
     self.sig_dir = Path("./pq_sign_keys"); self.sig_dir.mkdir(parents=True, exist_ok=True)
     sig_pub_path  = self.sig_dir / "sig_pub.bin"
     sig_priv_path = self.sig_dir / "sig_priv.bin.enc"
     meta_path     = self.sig_dir / "alg.txt"
+
     try_pq = _oqs_sig_name()
-    if try_pq:
+    if try_pq and oqs is not None:
+        oqs_mod = cast(Any, oqs)
         if sig_pub_path.exists() and sig_priv_path.exists() and meta_path.exists():
             self.sig_alg_name = meta_path.read_text().strip()
             self.sig_pub = sig_pub_path.read_bytes(); self._sig_priv_enc = sig_priv_path.read_bytes()
         else:
-            with oqs.Signature(try_pq) as sig:
-                pub = sig.generate_keypair(); sk = sig.export_secret_key()
+            with oqs_mod.Signature(try_pq) as sig:
+                pub = sig.generate_keypair()
+                sk = sig.export_secret_key()
             n = secrets.token_bytes(12); enc = n + aes.encrypt(n, sk, b"pqsig")
             sig_pub_path.write_bytes(pub); sig_priv_path.write_bytes(enc); meta_path.write_text(try_pq)
             self.sig_alg_name = try_pq; self.sig_pub = pub; self._sig_priv_enc = enc
     else:
+     
+        if STRICT_PQ2_ONLY:
+            raise RuntimeError("Strict PQ2 mode: ML-DSA signature not available; ensure liboqs is installed.")
+        
         if sig_pub_path.exists() and sig_priv_path.exists() and meta_path.exists():
             self.sig_alg_name = meta_path.read_text().strip()
             self.sig_pub = sig_pub_path.read_bytes(); self._sig_priv_enc = sig_priv_path.read_bytes()
@@ -660,138 +984,253 @@ def _km_load_or_create_signing(self: "KeyManager"):
             sig_pub_path.write_bytes(pub); sig_priv_path.write_bytes(enc); meta_path.write_text("Ed25519")
             self.sig_alg_name = "Ed25519"; self.sig_pub = pub; self._sig_priv_enc = enc
 
+
 def _km_decrypt_sig_priv(self: "KeyManager") -> bytes:
-    if getattr(self, "_sealed_cache", None) and self._sealed_cache.get("sig_priv_raw"): return self._sealed_cache["sig_priv_raw"]
-    passphrase = os.getenv(self.passphrase_env_var) or ""; salt = self.salt_file_path.read_bytes()
-    kek = hash_secret_raw(passphrase.encode(), salt, 3, 512*1024, max(2,(os.cpu_count() or 2)//2), 32, ArgonType.ID)
-    aes = AESGCM(kek); n, ct = self._sig_priv_enc[:12], self._sig_priv_enc[12:]
-    label = b"pqsig" if (getattr(self,"sig_alg_name","") or "").startswith("ML-DSA") else b"ed25519"
+    cache = getattr(self, "_sealed_cache", None)
+    if cache is not None and "sig_priv_raw" in cache:
+        return cache["sig_priv_raw"]  
+
+    sig_enc = cast(Optional[bytes], getattr(self, "_sig_priv_enc", None))
+    if not sig_enc:
+        raise RuntimeError("Signature private key not available")
+
+    passphrase = os.getenv(self.passphrase_env_var) or ""
+    salt = self.salt_file_path.read_bytes()
+    kek = hash_secret_raw(
+        passphrase.encode(),
+        salt,
+        3, 512 * 1024, max(2, (os.cpu_count() or 2) // 2),
+        32, ArgonType.ID
+    )
+    aes = AESGCM(kek)
+
+    n, ct = sig_enc[:12], sig_enc[12:]
+    label = b"pqsig" if (getattr(self, "sig_alg_name", "") or "").startswith("ML-DSA") else b"ed25519"
     return aes.decrypt(n, ct, label)
 
 def _km_sign(self, data: bytes) -> bytes:
-    if (getattr(self,"sig_alg_name","") or "").startswith("ML-DSA"):
-        # construct with the secret key (portable across oqs versions)
-        with oqs.Signature(self.sig_alg_name, _km_decrypt_sig_priv(self)) as sig:
+    if (getattr(self, "sig_alg_name", "") or "").startswith("ML-DSA"):
+        if oqs is None:
+            raise RuntimeError("PQ signature requested but oqs is unavailable")
+        oqs_mod = cast(Any, oqs)
+        with oqs_mod.Signature(self.sig_alg_name, _km_decrypt_sig_priv(self)) as sig:
             return sig.sign(data)
     else:
-        return ed25519.Ed25519PrivateKey.from_private_bytes(_km_decrypt_sig_priv(self)).sign(data)
-        
+        return ed25519.Ed25519PrivateKey.from_private_bytes(
+            _km_decrypt_sig_priv(self)
+        ).sign(data)
+
 def _km_verify(self, pub: bytes, sig_bytes: bytes, data: bytes) -> bool:
     try:
-        if (getattr(self,"sig_alg_name","") or "").startswith("ML-DSA"):
-            with oqs.Signature(self.sig_alg_name) as s:
+        if (getattr(self, "sig_alg_name", "") or "").startswith("ML-DSA"):
+            if oqs is None:
+                return False
+            oqs_mod = cast(Any, oqs)
+            with oqs_mod.Signature(self.sig_alg_name) as s:
                 return s.verify(data, sig_bytes, pub)
         else:
             ed25519.Ed25519PublicKey.from_public_bytes(pub).verify(sig_bytes, data)
             return True
     except Exception:
         return False
-# Monkey-patch KeyManager with new capabilities (executed after class is defined, before instantiation)
-KeyManager._load_or_create_hybrid_keys = _km_load_or_create_hybrid_keys
-KeyManager._decrypt_x25519_priv       = _km_decrypt_x25519_priv
-KeyManager._decrypt_pq_priv           = _km_decrypt_pq_priv
-KeyManager._load_or_create_signing    = _km_load_or_create_signing
-KeyManager._decrypt_sig_priv          = _km_decrypt_sig_priv
-KeyManager.sign_blob                  = _km_sign
-KeyManager.verify_blob                = _km_verify
-KeyManager.sealed                     = property(lambda self: getattr(self, "_sealed_store", None),
-                                                lambda self, v: setattr(self, "_sealed_store", v))
 
-# ---------- HD (per-domain) context ----------
+_KM = cast(Any, KeyManager)
+
+_KM._oqs_kem_name               = _km_oqs_kem_name
+_KM._load_or_create_hybrid_keys = _km_load_or_create_hybrid_keys
+_KM._decrypt_x25519_priv        = _km_decrypt_x25519_priv
+_KM._decrypt_pq_priv            = _km_decrypt_pq_priv
+_KM._load_or_create_signing     = _km_load_or_create_signing
+_KM._decrypt_sig_priv           = _km_decrypt_sig_priv
+_KM.sign_blob                   = _km_sign
+_KM.verify_blob                 = _km_verify
+_KM.sealed = property(
+    fget=lambda self: getattr(self, "_sealed_store", None),
+    fset=lambda self, v: setattr(self, "_sealed_store", v),
+)
+
 HD_FILE = Path("./sealed_store/hd_epoch.json")
+
+
 def hd_get_epoch() -> int:
     try:
         if HD_FILE.exists():
             return int(json.loads(HD_FILE.read_text()).get("epoch", 1))
-    except Exception: pass
+    except Exception:
+        pass
     return 1
+
+
 def hd_rotate_epoch() -> int:
     ep = hd_get_epoch() + 1
     HD_FILE.parent.mkdir(parents=True, exist_ok=True)
     HD_FILE.write_text(json.dumps({"epoch": ep, "rotated_at": int(time.time())}))
     HD_FILE.chmod(0o600)
-    try: colorsync.bump_epoch()
-    except Exception: pass
+    try:
+        colorsync.bump_epoch()
+    except Exception:
+        pass
     return ep
-def _rootk() -> bytes: return hkdf_sha3(encryption_key, info=b"QRS|rootk|v1", length=32)
+
+
+def _rootk() -> bytes:
+    return hkdf_sha3(encryption_key, info=b"QRS|rootk|v1", length=32)
+
+
 def derive_domain_key(domain: str, field: str, epoch: int) -> bytes:
     info = f"QRS|dom|{domain}|{field}|epoch={epoch}".encode()
     return hkdf_sha3(_rootk(), info=info, length=32)
-def build_hd_ctx(domain: str, field: str, rid: int | None = None) -> dict:
-    return {"domain": domain, "field": field, "epoch": hd_get_epoch(), "rid": int(rid or 0)}
 
-# ---------- AEAD oracle guard ----------
+
+def build_hd_ctx(domain: str, field: str, rid: int | None = None) -> dict:
+    return {
+        "domain": domain,
+        "field": field,
+        "epoch": hd_get_epoch(),
+        "rid": int(rid or 0),
+    }
+
+
 class DecryptionGuard:
-    def __init__(self, capacity=40, refill_per_min=20):
-        self.capacity=capacity; self.tokens=capacity; self.refill_per_min=refill_per_min; self.last=time.time(); self.lock=threading.Lock()
-    def _refill(self):
-        now=time.time(); add=(self.refill_per_min/60.0)*(now-self.last)
-        if add>0: self.tokens=min(self.capacity, self.tokens+add); self.last=now
-    def register_failure(self)->bool:
+    def __init__(self, capacity: int = 40, refill_per_min: int = 20) -> None:
+        self.capacity = capacity
+        self.tokens = capacity
+        self.refill_per_min = refill_per_min
+        self.last = time.time()
+        self.lock = threading.Lock()
+
+    def _refill(self) -> None:
+        now = time.time()
+        add = (self.refill_per_min / 60.0) * (now - self.last)
+        if add > 0:
+            self.tokens = min(self.capacity, self.tokens + add)
+            self.last = now
+
+    def register_failure(self) -> bool:
         with self.lock:
             self._refill()
-            if self.tokens>=1:
-                self.tokens-=1; time.sleep(random.uniform(0.05,0.25)); return True
+            if self.tokens >= 1:
+                self.tokens -= 1
+                time.sleep(random.uniform(0.05, 0.25))
+                return True
             return False
-dec_guard = DecryptionGuard()
 
-# ---------- Sealed Audit ----------
+dec_guard = DecryptionGuard()
 AUDIT_FILE = Path("./sealed_store/audit.log")
+
 class AuditTrail:
-    def __init__(self, km: "KeyManager"): self.km=km; AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    def _key(self)->bytes:
-        passphrase = os.getenv(self.km.passphrase_env_var) or ""; salt = self.km.salt_file_path.read_bytes()
-        base_kek = hash_secret_raw(passphrase.encode(), salt, 3, 512*1024, max(2,(os.cpu_count() or 2)//2), 32, ArgonType.ID)
-        sealed = self.km.sealed_store._derive_split_kek(base_kek)
-        return hkdf_sha3(sealed, info=b"QRS|audit|v1", length=32)
-    def _last_hash(self)->str:
+    def __init__(self, km: "KeyManager"):
+        self.km = km
+        AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    def _key(self) -> bytes:
+
+        passphrase = os.getenv(self.km.passphrase_env_var) or ""
+        salt = self.km.salt_file_path.read_bytes()
+        base_kek = hash_secret_raw(
+            passphrase.encode(),
+            salt,
+            time_cost=3,
+            memory_cost=512 * 1024,
+            parallelism=max(2, (os.cpu_count() or 2) // 2),
+            hash_len=32,
+            type=ArgonType.ID,
+        )
+
+        sealed_store = getattr(self.km, "sealed_store", None)
+        if isinstance(sealed_store, SealedStore):
+            split_kek = sealed_store._derive_split_kek(base_kek)
+        else:
+    
+            split_kek = hkdf_sha3(base_kek, info=b"QRS|split-kek|v1", length=32)
+
+        return hkdf_sha3(split_kek, info=b"QRS|audit|v1", length=32)
+
+    def _last_hash(self) -> str:
         try:
             with AUDIT_FILE.open("rb") as f:
-                f.seek(0, os.SEEK_END); size=f.tell()
-                if size==0: return "GENESIS"
-                back=min(8192,size); f.seek(size-back); lines=f.read().splitlines()
-                if not lines: return "GENESIS"
-                return json.loads(lines[-1].decode()).get("h","GENESIS")
-        except Exception: return "GENESIS"
-    def append(self, event:str, data:dict, actor:str="system"):
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                if size == 0:
+                    return "GENESIS"
+                back = min(8192, size)
+                f.seek(size - back)
+                lines = f.read().splitlines()
+                if not lines:
+                    return "GENESIS"
+                return json.loads(lines[-1].decode()).get("h", "GENESIS")
+        except Exception:
+            return "GENESIS"
+
+    def append(self, event: str, data: dict, actor: str = "system"):
         try:
-            ent={"ts":int(time.time()),"actor":actor,"event":event,"data":data,"prev":self._last_hash()}
-            j=json.dumps(ent, separators=(",",":")).encode(); h=hashlib.sha3_256(j).hexdigest()
-            n=secrets.token_bytes(12); ct=AESGCM(self._key()).encrypt(n, j, b"audit")
-            rec=json.dumps({"n":b64e(n),"ct":b64e(ct),"h":h}, separators=(",",":"))+"\n"
-            with AUDIT_FILE.open("a", encoding="utf-8") as f: f.write(rec); AUDIT_FILE.chmod(0o600)
-        except Exception as e: logger.error(f"audit append failed: {e}", exc_info=True)
-    def verify(self)->dict:
-        ok=True; count=0; prev="GENESIS"
+            ent = {
+                "ts": int(time.time()),
+                "actor": actor,
+                "event": event,
+                "data": data,
+                "prev": self._last_hash(),
+            }
+            j = json.dumps(ent, separators=(",", ":")).encode()
+            h = hashlib.sha3_256(j).hexdigest()
+            n = secrets.token_bytes(12)
+            ct = AESGCM(self._key()).encrypt(n, j, b"audit")
+            rec = json.dumps({"n": b64e(n), "ct": b64e(ct), "h": h}, separators=(",", ":")) + "\n"
+            with AUDIT_FILE.open("a", encoding="utf-8") as f:
+                f.write(rec)
+                AUDIT_FILE.chmod(0o600)
+        except Exception as e:
+            logger.error(f"audit append failed: {e}", exc_info=True)
+
+    def verify(self) -> dict:
+        ok = True
+        count = 0
+        prev = "GENESIS"
         try:
-            key=self._key()
+            key = self._key()
             with AUDIT_FILE.open("rb") as f:
                 for line in f:
-                    if not line.strip(): continue
-                    obj=json.loads(line.decode()); pt=AESGCM(key).decrypt(b64d(obj["n"]), b64d(obj["ct"]), b"audit")
-                    if hashlib.sha3_256(pt).hexdigest()!=obj["h"]: ok=False; break
-                    ent=json.loads(pt.decode()); 
-                    if ent.get("prev")!=prev: ok=False; break
-                    prev=obj["h"]; count+=1
-            return {"ok":ok,"entries":count,"tip":prev}
+                    if not line.strip():
+                        continue
+                    obj = json.loads(line.decode())
+                    pt = AESGCM(key).decrypt(b64d(obj["n"]), b64d(obj["ct"]), b"audit")
+                    if hashlib.sha3_256(pt).hexdigest() != obj["h"]:
+                        ok = False
+                        break
+                    ent = json.loads(pt.decode())
+                    if ent.get("prev") != prev:
+                        ok = False
+                        break
+                    prev = obj["h"]
+                    count += 1
+            return {"ok": ok, "entries": count, "tip": prev}
         except Exception as e:
-            logger.error(f"audit verify failed: {e}", exc_info=True); return {"ok":False,"entries":0,"tip":""}
-    def tail(self, limit:int=20)->list[dict]:
-        out=[]; 
+            logger.error(f"audit verify failed: {e}", exc_info=True)
+            return {"ok": False, "entries": 0, "tip": ""}
+
+    def tail(self, limit: int = 20) -> list[dict]:
+        out: list[dict] = []
         try:
-            key=self._key(); lines=AUDIT_FILE.read_text(encoding="utf-8").splitlines()
-            for line in lines[-max(1,min(100,limit)):]:
-                obj=json.loads(line); pt=AESGCM(key).decrypt(b64d(obj["n"]), b64d(obj["ct"]), b"audit")
-                ent=json.loads(pt.decode()); out.append({"ts":ent["ts"],"actor":ent["actor"],"event":ent["event"],"data":ent["data"]})
-        except Exception as e: logger.error(f"audit tail failed: {e}", exc_info=True)
+            key = self._key()
+            lines = AUDIT_FILE.read_text(encoding="utf-8").splitlines()
+            for line in lines[-max(1, min(100, limit)):]:
+                obj = json.loads(line)
+                pt = AESGCM(key).decrypt(b64d(obj["n"]), b64d(obj["ct"]), b"audit")
+                ent = json.loads(pt.decode())
+                out.append(
+                    {
+                        "ts": ent["ts"],
+                        "actor": ent["actor"],
+                        "event": ent["event"],
+                        "data": ent["data"],
+                    }
+                )
+        except Exception as e:
+            logger.error(f"audit tail failed: {e}", exc_info=True)
         return out
 
-
-# ======================== END PQE FORWARD-ONLY UPGRADE ========================
 key_manager = KeyManager()
 encryption_key = key_manager.get_key()
-
-# === Wire up sealed store + hybrid/signing keys ===
 key_manager._sealed_cache = None
 key_manager.sealed_store = SealedStore(key_manager)
 if not key_manager.sealed_store.exists() and os.getenv("QRS_ENABLE_SEALED","1")=="1":
@@ -800,60 +1239,88 @@ if not key_manager.sealed_store.exists() and os.getenv("QRS_ENABLE_SEALED","1")=
     key_manager.sealed_store.save_from_current_keys()
 if key_manager.sealed_store.exists():
     key_manager.sealed_store.load_into_km()
-# Ensure keys exist in any case
+
 key_manager._load_or_create_hybrid_keys()
 key_manager._load_or_create_signing()
 
 audit = AuditTrail(key_manager)
 audit.append("boot", {"sealed_loaded": bool(getattr(key_manager, "_sealed_cache", None))})
 
-# === Forward-only PQ2 encrypt/decrypt (overrides old functions) ===
-def encrypt_data(data, ctx: Optional[dict] = None) -> Optional[str]:
+
+def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional[str]:
     try:
         if data is None:
             return None
         if not isinstance(data, bytes):
             data = str(data).encode()
 
-        # 1) Compress then DEK-AEAD
         comp_alg, pt_comp, orig_len = _compress_payload(data)
         dek = secrets.token_bytes(32)
         data_nonce = secrets.token_bytes(12)
         data_ct = AESGCM(dek).encrypt(data_nonce, pt_comp, None)
 
-        # 2) Hybrid KEM secret: X25519(ephemeral→static) + optional ML-KEM
-        x_pub = key_manager.x25519_pub
+
+        if STRICT_PQ2_ONLY and not (key_manager._pq_alg_name and getattr(key_manager, "pq_pub", None)):
+            raise RuntimeError("Strict PQ2 mode requires ML-KEM; liboqs and PQ KEM keys must be present.")
+
+        x_pub: bytes = key_manager.x25519_pub
+        if not x_pub:
+            raise RuntimeError("x25519 public key not initialized (used alongside PQ KEM in hybrid wrap)")
+
+       
         eph_priv = x25519.X25519PrivateKey.generate()
-        eph_pub  = eph_priv.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        eph_pub = eph_priv.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
         ss_x = eph_priv.exchange(x25519.X25519PublicKey.from_public_bytes(x_pub))
 
-        pq_ct = b""; ss_pq = b""
-        if key_manager._pq_alg_name and oqs is not None:
-                with oqs.KeyEncapsulation(key_manager._pq_alg_name, key_manager._decrypt_pq_priv()) as kem:
-                    ss_pq = kem.decap_secret(pq_ct)
+   
+        pq_ct: bytes = b""
+        ss_pq: bytes = b""
+        if key_manager._pq_alg_name and oqs is not None and getattr(key_manager, "pq_pub", None):
+            oqs_mod = cast(Any, oqs)
+            with oqs_mod.KeyEncapsulation(key_manager._pq_alg_name) as kem:
+                pq_ct, ss_pq = kem.encap_secret(cast(bytes, key_manager.pq_pub))
+        else:
+            if STRICT_PQ2_ONLY:
+                raise RuntimeError("Strict PQ2 mode: PQ KEM public key not available.")
 
-        # 3) ColorSync meta (public) + HD ctx (optional)
+       
         col = colorsync.sample()
-        col_info = json.dumps({
-            "qid25": col["qid25"]["code"], "hx": col["hex"],
-            "en": col["entropy_norm"], "ep": col["epoch"]
-        }, separators=(",",":")).encode()
+        col_info = json.dumps(
+            {
+                "qid25": col["qid25"]["code"],
+                "hx": col["hex"],
+                "en": col["entropy_norm"],
+                "ep": col["epoch"],
+            },
+            separators=(",", ":"),
+        ).encode()
 
-        hd_ctx = None; dk = b""
-        if isinstance(ctx, dict) and ctx.get("domain"):
+   
+        hd_ctx: Optional[dict[str, Any]] = None
+        dk: bytes = b""
+        if isinstance(ctx, Mapping) and ctx.get("domain"):
             ep = int(ctx.get("epoch", hd_get_epoch()))
-            dk = derive_domain_key(ctx["domain"], ctx.get("field",""), ep)
-            hd_ctx = {"domain": ctx["domain"], "field": ctx.get("field",""), "epoch": ep, "rid": int(ctx.get("rid",0))}
+            field = str(ctx.get("field", ""))
+            dk = derive_domain_key(str(ctx["domain"]), field, ep)
+            hd_ctx = {
+                "domain": str(ctx["domain"]),
+                "field": field,
+                "epoch": ep,
+                "rid": int(ctx.get("rid", 0)),
+            }
 
-        # 4) Wrap DEK with HKDF(ss_x||ss_pq||DomainK, info=WRAP_INFO|color|HD?)
+ 
         wrap_info = WRAP_INFO + b"|" + col_info + (b"|HD" if hd_ctx else b"")
         wrap_key = hkdf_sha3(ss_x + ss_pq + dk, info=wrap_info, length=32)
         wrap_nonce = secrets.token_bytes(12)
         dek_wrapped = AESGCM(wrap_key).encrypt(wrap_nonce, dek, None)
 
-        # 5) Envelope (signed)
-        env = {
-            "v": "QRS2", "alg": HYBRID_ALG_ID,
+
+        env: dict[str, Any] = {
+            "v": "QRS2",
+            "alg": HYBRID_ALG_ID,
             "pq_alg": key_manager._pq_alg_name or "",
             "pq_ct": b64e(pq_ct),
             "x_ephemeral_pub": b64e(eph_pub),
@@ -863,134 +1330,208 @@ def encrypt_data(data, ctx: Optional[dict] = None) -> Optional[str]:
             "data_ct": b64e(data_ct),
             "comp": {"alg": comp_alg, "orig_len": orig_len},
             "col_meta": {
-                "qid25": col["qid25"]["code"], "qid25_hex": col["qid25"]["hex"],
-                "hex": col["hex"], "oklch": col["oklch"], "hsl": col["hsl"],
-                "entropy_norm": col["entropy_norm"], "epoch": col["epoch"]
-            }
+                "qid25": col["qid25"]["code"],
+                "qid25_hex": col["qid25"]["hex"],
+                "hex": col["hex"],
+                "oklch": col["oklch"],
+                "hsl": col["hsl"],
+                "entropy_norm": col["entropy_norm"],
+                "epoch": col["epoch"],
+            },
         }
-        if hd_ctx: env["hd_ctx"] = hd_ctx
+        if hd_ctx:
+            env["hd_ctx"] = hd_ctx
 
         core = {
-            "v": env["v"], "alg": env["alg"], "pq_alg": env["pq_alg"],
-            "pq_ct": env["pq_ct"], "x_ephemeral_pub": env["x_ephemeral_pub"],
-            "wrap_nonce": env["wrap_nonce"], "dek_wrapped": env["dek_wrapped"],
-            "data_nonce": env["data_nonce"], "data_ct": env["data_ct"],
-            "comp": env["comp"], "col_meta": env["col_meta"],
+            "v": env["v"],
+            "alg": env["alg"],
+            "pq_alg": env["pq_alg"],
+            "pq_ct": env["pq_ct"],
+            "x_ephemeral_pub": env["x_ephemeral_pub"],
+            "wrap_nonce": env["wrap_nonce"],
+            "dek_wrapped": env["dek_wrapped"],
+            "data_nonce": env["data_nonce"],
+            "data_ct": env["data_ct"],
+            "comp": env["comp"],
+            "col_meta": env["col_meta"],
             "policy": {
                 "min_env_version": POLICY["min_env_version"],
                 "require_sig_on_pq2": POLICY["require_sig_on_pq2"],
                 "require_pq_if_available": POLICY["require_pq_if_available"],
             },
-            "hd_ctx": env.get("hd_ctx", {})
+            "hd_ctx": env.get("hd_ctx", {}),
         }
         sig_payload = _canon_json(core)
-        sig_raw = key_manager.sign_blob(sig_payload)
-        _, alg_id_short = SIG_ALG_IDS.get(key_manager.sig_alg_name, ("Ed25519","ED25"))
-        env["sig"] = {"alg": key_manager.sig_alg_name, "alg_id": alg_id_short,
-                      "pub": b64e(key_manager.sig_pub), "fp8": _fp8(key_manager.sig_pub), "val": b64e(sig_raw)}
 
-        blob_json = json.dumps(env, separators=(",",":")).encode()
+
+        sig_alg_name: str = key_manager.sig_alg_name or ""
+        if STRICT_PQ2_ONLY and not (sig_alg_name.startswith("ML-DSA") or sig_alg_name.startswith("Dilithium")):
+            raise RuntimeError("Strict PQ2 mode requires ML-DSA (Dilithium) signatures.")
+        sig_raw = key_manager.sign_blob(sig_payload)
+
+        alg_id_short = SIG_ALG_IDS.get(sig_alg_name, ("Ed25519", "ED25"))[1]
+        sig_pub_b = cast(Optional[bytes], key_manager.sig_pub)
+        if sig_pub_b is None:
+            raise RuntimeError("Signature public key not available")
+
+        env["sig"] = {
+            "alg": sig_alg_name,
+            "alg_id": alg_id_short,
+            "pub": b64e(sig_pub_b),
+            "fp8": _fp8(sig_pub_b),
+            "val": b64e(sig_raw),
+        }
+
+        blob_json = json.dumps(env, separators=(",", ":")).encode()
         if len(blob_json) > ENV_CAP_BYTES:
             logger.error(f"Envelope too large ({len(blob_json)}B > {ENV_CAP_BYTES}B)")
             return None
+
         return MAGIC_PQ2_PREFIX + base64.urlsafe_b64encode(blob_json).decode()
 
     except Exception as e:
         logger.error(f"PQ2 encrypt failed: {e}", exc_info=True)
         return None
 
+
+
 def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
     try:
-        if not encrypted_data_b64 or not isinstance(encrypted_data_b64, str) or not encrypted_data_b64.startswith(MAGIC_PQ2_PREFIX):
-            # forward-only: we don't support legacy blobs in this build
-            logger.error("Non-PQ2 ciphertext provided (forward-only mode).")
-            return None
+      
+        if isinstance(encrypted_data_b64, str) and encrypted_data_b64.startswith(MAGIC_PQ2_PREFIX):
+            raw = base64.urlsafe_b64decode(encrypted_data_b64[len(MAGIC_PQ2_PREFIX):])
+            env = cast(dict[str, Any], json.loads(raw.decode("utf-8")))
+            if env.get("v") != "QRS2" or env.get("alg") != HYBRID_ALG_ID:
+                return None
 
-        env = json.loads(base64.urlsafe_b64decode(encrypted_data_b64[len(MAGIC_PQ2_PREFIX):]).decode())
-        if env.get("v") != "QRS2" or env.get("alg") != HYBRID_ALG_ID:
-            return None
+            if bool(POLICY.get("require_sig_on_pq2", False)) and "sig" not in env:
+                return None
 
-        # Anti-downgrade policy
-        if POLICY["require_sig_on_pq2"] and "sig" not in env:
-            return None
+       
+            if STRICT_PQ2_ONLY and not env.get("pq_alg"):
+                logger.warning("Strict PQ2 mode: envelope missing PQ KEM.")
+                return None
 
-        # Verify signature
-        sig = env.get("sig") or {}
-        sig_pub = b64d(sig.get("pub","")); sig_val = b64d(sig.get("val",""))
-        core = {
-            "v": env["v"], "alg": env["alg"], "pq_alg": env["pq_alg"],
-            "pq_ct": env["pq_ct"], "x_ephemeral_pub": env["x_ephemeral_pub"],
-            "wrap_nonce": env["wrap_nonce"], "dek_wrapped": env["dek_wrapped"],
-            "data_nonce": env["data_nonce"], "data_ct": env["data_ct"],
-            "comp": env.get("comp", {"alg":"none","orig_len":None}),
-            "col_meta": env.get("col_meta", {}), "policy": {
-                "min_env_version": POLICY["min_env_version"],
-                "require_sig_on_pq2": POLICY["require_sig_on_pq2"],
-                "require_pq_if_available": POLICY["require_pq_if_available"],
-            },
-            "hd_ctx": env.get("hd_ctx", {})
-        }
-        sig_payload = _canon_json(core)
-        if not key_manager.verify_blob(sig_pub, sig_val, sig_payload):
-            return None
-        if _fp8(sig_pub) != _fp8(key_manager.sig_pub):
-            return None
+            sig = cast(dict[str, Any], env.get("sig") or {})
+            sig_pub = b64d(cast(str, sig.get("pub", "")))
+            sig_val = b64d(cast(str, sig.get("val", "")))
 
-        pq_ct   = b64d(env["pq_ct"]) if env.get("pq_ct") else b""
-        eph_pub = b64d(env["x_ephemeral_pub"])
-        wrap_nonce = b64d(env["wrap_nonce"])
-        dek_wrapped = b64d(env["dek_wrapped"])
-        data_nonce = b64d(env["data_nonce"])
-        data_ct = b64d(env["data_ct"])
+            core: dict[str, Any] = {
+                "v": env.get("v", ""),
+                "alg": env.get("alg", ""),
+                "pq_alg": env.get("pq_alg", ""),
+                "pq_ct": env.get("pq_ct", ""),
+                "x_ephemeral_pub": env.get("x_ephemeral_pub", ""),
+                "wrap_nonce": env.get("wrap_nonce", ""),
+                "dek_wrapped": env.get("dek_wrapped", ""),
+                "data_nonce": env.get("data_nonce", ""),
+                "data_ct": env.get("data_ct", ""),
+                "comp": env.get("comp", {"alg": "none", "orig_len": None}),
+                "col_meta": env.get("col_meta", {}),
+                "policy": {
+                    "min_env_version": POLICY["min_env_version"],
+                    "require_sig_on_pq2": POLICY["require_sig_on_pq2"],
+                    "require_pq_if_available": POLICY["require_pq_if_available"],
+                },
+                "hd_ctx": env.get("hd_ctx", {}),
+            }
+            sig_payload = _canon_json(core)
 
-        # Rebuild hybrid secret
-        x_priv = key_manager._decrypt_x25519_priv()
-        ss_x = x_priv.exchange(x25519.X25519PublicKey.from_public_bytes(eph_pub))
-        ss_pq = b""
-        if env.get("pq_alg") and oqs is not None and key_manager._pq_alg_name:
-            with oqs.KeyEncapsulation(key_manager._pq_alg_name, key_manager._decrypt_pq_priv()) as kem:
-                ss_pq = kem.decap_secret(pq_ct)
+            if not key_manager.verify_blob(sig_pub, sig_val, sig_payload):
+                return None
 
-        col_meta = env.get("col_meta") or {}
-        col_info = json.dumps({
-            "qid25": col_meta.get("qid25",""), "hx": col_meta.get("hex",""),
-            "en": col_meta.get("entropy_norm",0.0), "ep": col_meta.get("epoch","")
-        }, separators=(",",":")).encode()
+            km_sig_pub = cast(Optional[bytes], getattr(key_manager, "sig_pub", None))
+            if km_sig_pub is None or not sig_pub or _fp8(sig_pub) != _fp8(km_sig_pub):
+                return None
 
-        hd_ctx = env.get("hd_ctx") or {}
-        dk = b""
-        if hd_ctx.get("domain"):
+           
+            pq_ct       = b64d(cast(str, env["pq_ct"])) if env.get("pq_ct") else b""
+            eph_pub     = b64d(cast(str, env["x_ephemeral_pub"]))
+            wrap_nonce  = b64d(cast(str, env["wrap_nonce"]))
+            dek_wrapped = b64d(cast(str, env["dek_wrapped"]))
+            data_nonce  = b64d(cast(str, env["data_nonce"]))
+            data_ct     = b64d(cast(str, env["data_ct"]))
+
+           
+            x_priv = key_manager._decrypt_x25519_priv()
+            ss_x = x_priv.exchange(x25519.X25519PublicKey.from_public_bytes(eph_pub))
+
+          
+            ss_pq = b""
+            if env.get("pq_alg") and oqs is not None and key_manager._pq_alg_name:
+                oqs_mod = cast(Any, oqs)
+                with oqs_mod.KeyEncapsulation(key_manager._pq_alg_name, key_manager._decrypt_pq_priv()) as kem:
+                    ss_pq = kem.decap_secret(pq_ct)
+            else:
+                if STRICT_PQ2_ONLY:
+                    if not dec_guard.register_failure():
+                        logger.error("Strict PQ2: missing PQ decapsulation capability.")
+                    return None
+
+      
+            col_meta = cast(dict[str, Any], env.get("col_meta") or {})
+            col_info = json.dumps(
+                {
+                    "qid25": str(col_meta.get("qid25", "")),
+                    "hx": str(col_meta.get("hex", "")),
+                    "en": float(col_meta.get("entropy_norm", 0.0)),
+                    "ep": str(col_meta.get("epoch", "")),
+                },
+                separators=(",", ":"),
+            ).encode()
+
+            hd_ctx = cast(dict[str, Any], env.get("hd_ctx") or {})
+            dk = b""
+            domain_val = hd_ctx.get("domain")
+            if isinstance(domain_val, str) and domain_val:
+                try:
+                    dk = derive_domain_key(
+                        domain_val,
+                        str(hd_ctx.get("field", "")),
+                        int(hd_ctx.get("epoch", 1)),
+                    )
+                except Exception:
+                    dk = b""
+
+       
+            wrap_info = WRAP_INFO + b"|" + col_info + (b"|HD" if hd_ctx else b"")
+            wrap_key = hkdf_sha3(ss_x + ss_pq + dk, info=wrap_info, length=32)
+
             try:
-                dk = derive_domain_key(hd_ctx.get("domain",""), hd_ctx.get("field",""), int(hd_ctx.get("epoch",1)))
-            except Exception: dk = b""
+                dek = AESGCM(wrap_key).decrypt(wrap_nonce, dek_wrapped, None)
+            except Exception:
+                if not dec_guard.register_failure():
+                    logger.error("AEAD failure budget exceeded.")
+                return None
 
-        wrap_info = WRAP_INFO + b"|" + col_info + (b"|HD" if hd_ctx else b"")
-        wrap_key = hkdf_sha3(ss_x + ss_pq + dk, info=wrap_info, length=32)
+            try:
+                plaintext_comp = AESGCM(dek).decrypt(data_nonce, data_ct, None)
+            except Exception:
+                if not dec_guard.register_failure():
+                    logger.error("AEAD failure budget exceeded.")
+                return None
 
-        # Unwrap DEK and decrypt
-        try:
-            dek = AESGCM(wrap_key).decrypt(wrap_nonce, dek_wrapped, None)
-        except Exception:
-            if not dec_guard.register_failure(): logger.error("AEAD failure budget exceeded.")
-            return None
-        try:
-            plaintext_comp = AESGCM(dek).decrypt(data_nonce, data_ct, None)
-        except Exception:
-            if not dec_guard.register_failure(): logger.error("AEAD failure budget exceeded.")
-            return None
+            comp = cast(dict[str, Any], env.get("comp") or {"alg": "none", "orig_len": None})
+            try:
+                plaintext = _decompress_payload(
+                    str(comp.get("alg", "none")),
+                    plaintext_comp,
+                    cast(Optional[int], comp.get("orig_len")),
+                )
+            except Exception:
+                if not dec_guard.register_failure():
+                    logger.error("Decompression failure budget exceeded.")
+                return None
 
-        comp = env.get("comp") or {"alg":"none","orig_len":None}
-        try:
-            plaintext = _decompress_payload(comp.get("alg","none"), plaintext_comp, comp.get("orig_len"))
-        except Exception:
-            if not dec_guard.register_failure(): logger.error("Decompression failure budget exceeded.")
-            return None
-        return plaintext.decode("utf-8")
+            return plaintext.decode("utf-8")
 
-    except Exception as e:
-        logger.error(f"PQ2 decrypt failed: {e}", exc_info=True)
+    
+        logger.warning("Rejected non-PQ2 ciphertext (strict PQ2 mode).")
         return None
 
+    except Exception as e:
+        logger.error(f"decrypt_data failed: {e}", exc_info=True)
+        return None
 
 
 def _gen_overwrite_patterns(passes: int):
@@ -1030,6 +1571,8 @@ def _values_for_types(col_types_ordered: list[tuple[str, str]], pattern_func):
 dev = qml.device("default.qubit", wires=5)
 
 registration_enabled = True
+
+
 def create_tables():
     if not DB_FILE.exists():
         DB_FILE.touch(mode=0o600)
@@ -1555,7 +2098,6 @@ def _finite_f(v: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
         
-
 def approximate_nearest_city(
     lat: float,
     lon: float,
@@ -1598,7 +2140,6 @@ def approximate_nearest_city(
 
 
 CityMap = Dict[str, Any]
-
 
 def _coerce_city_index(cities_opt: Optional[Mapping[str, Any]]) -> CityMap:
     if cities_opt is not None:
@@ -1662,7 +2203,6 @@ async def fetch_street_name_llm(
         cpu, ram = get_cpu_ram_usage()
         quantum_results = quantum_hazard_scan(cpu, ram)
         quantum_state_str = str(quantum_results)
-
      
         llm_prompt = f"""
 [action]You are an Advanced Hypertime Nanobot Reverse-Geocoder with quantum synergy. 
