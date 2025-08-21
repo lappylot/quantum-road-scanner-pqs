@@ -1,12 +1,12 @@
 modules = ["python-3.12"]
-run = "bash -lc 'chmod +x setup.sh && ./setup.sh && source .venv/bin/activate && source .env.oqs && python main.py'"
+run = "bash -lc 'chmod +x setup.sh && ./setup.sh && source .env.oqs && python3 main.py'"
 
 [nix]
 channel = "stable-25_05"
 packages = ["cargo", "cmake", "gcc", "git", "gnumake", "libiconv", "libxcrypt", "ninja", "openssl", "pkg-config", "rustc"]
 
 [deployment]
-run = ["bash", "-lc", "chmod +x setup.sh && ./setup.sh && source .venv/bin/activate && source .env.oqs && python main.py"]
+run = ["bash", "-lc", "chmod +x setup.sh && ./setup.sh && source .env.oqs && python3 main.py"]
 
 [[ports]]
 localPort = 3000
