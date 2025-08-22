@@ -53,7 +53,6 @@ from flask.sessions import SecureCookieSessionInterface
 from flask.json.tag  import TaggedJSONSerializer
 from itsdangerous import URLSafeTimedSerializer, BadSignature, BadTimeSignature
 import zlib as _zlib 
-from dataclasses import dataclass
 try:
     import zstandard as zstd  
     _HAS_ZSTD = True
@@ -88,6 +87,7 @@ console_handler.setLevel(logging.INFO)
 formatter = logging.Formatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
+
 
 logger.addHandler(console_handler)
 
@@ -132,6 +132,171 @@ if 'parse_safe_float' not in globals():
         if not math.isfinite(f):
             raise ValueError("Non-finite float not allowed")
         return f
+
+# === ENV names for key-only-in-env mode ===
+ENV_SALT_B64              = "QRS_SALT_B64"             # base64 salt for KDF (Scrypt/Argon2)
+ENV_X25519_PUB_B64        = "QRS_X25519_PUB_B64"
+ENV_X25519_PRIV_ENC_B64   = "QRS_X25519_PRIV_ENC_B64"  # AESGCM(nonce|ct) b64
+ENV_PQ_KEM_ALG            = "QRS_PQ_KEM_ALG"           # e.g. "ML-KEM-768"
+ENV_PQ_PUB_B64            = "QRS_PQ_PUB_B64"
+ENV_PQ_PRIV_ENC_B64       = "QRS_PQ_PRIV_ENC_B64"      # AESGCM(nonce|ct) b64
+ENV_SIG_ALG               = "QRS_SIG_ALG"              # "ML-DSA-87"/"Dilithium5"/"Ed25519"
+ENV_SIG_PUB_B64           = "QRS_SIG_PUB_B64"
+ENV_SIG_PRIV_ENC_B64      = "QRS_SIG_PRIV_ENC_B64"     # AESGCM(nonce|ct) b64
+ENV_SEALED_B64            = "QRS_SEALED_B64"           # sealed store JSON (env) b64
+
+# Small b64 helpers (env <-> bytes)
+
+def _b64set(name: str, raw: bytes) -> None:
+    os.environ[name] = base64.b64encode(raw).decode("utf-8")
+
+def _b64get(name: str, required: bool = False) -> Optional[bytes]:
+    s = os.getenv(name)
+    if not s:
+        if required:
+            raise ValueError(f"Missing required env var: {name}")
+        return None
+    return base64.b64decode(s.encode("utf-8"))
+
+def _derive_kek(passphrase: str, salt: bytes) -> bytes:
+    return hash_secret_raw(
+        passphrase.encode("utf-8"),
+        salt,
+        3,                      # time_cost
+        512 * 1024,             # memory_cost (KiB)
+        max(2, (os.cpu_count() or 2)//2),  # parallelism
+        32,
+        ArgonType.ID
+    )
+
+def _enc_with_label(kek: bytes, label: bytes, raw: bytes) -> bytes:
+    n = secrets.token_bytes(12)
+    ct = AESGCM(kek).encrypt(n, raw, label)
+    return n + ct
+
+def _detect_oqs_kem() -> Optional[str]:
+    if oqs is None: return None
+    for n in ("ML-KEM-768","Kyber768","FIPS204-ML-KEM-768"):
+        try:
+            oqs.KeyEncapsulation(n)
+            return n
+        except Exception:
+            continue
+    return None
+
+def _detect_oqs_sig() -> Optional[str]:
+    if oqs is None: return None
+    for n in ("ML-DSA-87","ML-DSA-65","Dilithium5","Dilithium3"):
+        try:
+            oqs.Signature(n)
+            return n
+        except Exception:
+            continue
+    return None
+
+def _gen_passphrase() -> str:
+    return base64.urlsafe_b64encode(os.urandom(48)).decode().rstrip("=")
+
+def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> None:
+    """
+    Generates any missing secrets directly into os.environ (no files).
+    Safe to call multiple times. If echo_exports=True, prints export lines.
+    """
+    exports: list[tuple[str,str]] = []
+
+    # 1) Ensure passphrase & salt
+    if not os.getenv("ENCRYPTION_PASSPHRASE"):
+        pw = _gen_passphrase()
+        os.environ["ENCRYPTION_PASSPHRASE"] = pw
+        exports.append(("ENCRYPTION_PASSPHRASE", pw))
+        logger.warning("ENCRYPTION_PASSPHRASE was missing — generated for this process.")
+    passphrase = os.environ["ENCRYPTION_PASSPHRASE"]
+
+    salt = _b64get(ENV_SALT_B64)
+    if salt is None:
+        salt = os.urandom(32)
+        _b64set(ENV_SALT_B64, salt)
+        exports.append((ENV_SALT_B64, base64.b64encode(salt).decode()))
+        logger.info("Generated KDF salt to env.")
+    kek = _derive_kek(passphrase, salt)
+
+    # 2) x25519
+    if not (os.getenv(ENV_X25519_PUB_B64) and os.getenv(ENV_X25519_PRIV_ENC_B64)):
+        x_priv = x25519.X25519PrivateKey.generate()
+        x_pub  = x_priv.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+        x_raw  = x_priv.private_bytes(
+            serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption()
+        )
+        x_enc  = _enc_with_label(kek, b"x25519", x_raw)
+        _b64set(ENV_X25519_PUB_B64, x_pub)
+        _b64set(ENV_X25519_PRIV_ENC_B64, x_enc)
+        exports.append((ENV_X25519_PUB_B64, base64.b64encode(x_pub).decode()))
+        exports.append((ENV_X25519_PRIV_ENC_B64, base64.b64encode(x_enc).decode()))
+        logger.info("Generated x25519 keypair to env.")
+
+    # 3) PQ KEM (strict mode requires it)
+    need_pq = strict_pq2 or os.getenv(ENV_PQ_KEM_ALG) or oqs is not None
+    if need_pq:
+        if oqs is None and strict_pq2:
+            raise RuntimeError("STRICT_PQ2_ONLY=1 but liboqs is unavailable.")
+        if not (os.getenv(ENV_PQ_KEM_ALG) and os.getenv(ENV_PQ_PUB_B64) and os.getenv(ENV_PQ_PRIV_ENC_B64)):
+            alg = os.getenv(ENV_PQ_KEM_ALG) or _detect_oqs_kem()
+            if not alg and strict_pq2:
+                raise RuntimeError("Strict PQ2 mode: ML-KEM not available.")
+            if alg and oqs is not None:
+                with oqs.KeyEncapsulation(alg) as kem:
+                    pq_pub = kem.generate_keypair()
+                    pq_sk  = kem.export_secret_key()
+                pq_enc = _enc_with_label(kek, b"pqkem", pq_sk)
+                os.environ[ENV_PQ_KEM_ALG] = alg
+                _b64set(ENV_PQ_PUB_B64, pq_pub)
+                _b64set(ENV_PQ_PRIV_ENC_B64, pq_enc)
+                exports.append((ENV_PQ_KEM_ALG, alg))
+                exports.append((ENV_PQ_PUB_B64, base64.b64encode(pq_pub).decode()))
+                exports.append((ENV_PQ_PRIV_ENC_B64, base64.b64encode(pq_enc).decode()))
+                logger.info("Generated PQ KEM keypair (%s) to env.", alg)
+
+    # 4) Signature (PQ preferred; Ed25519 fallback if not strict)
+    if not (os.getenv(ENV_SIG_ALG) and os.getenv(ENV_SIG_PUB_B64) and os.getenv(ENV_SIG_PRIV_ENC_B64)):
+        pq_sig = _detect_oqs_sig()
+        if pq_sig:
+            with oqs.Signature(pq_sig) as s:
+                sig_pub = s.generate_keypair()
+                sig_sk  = s.export_secret_key()
+            sig_enc = _enc_with_label(kek, b"pqsig", sig_sk)
+            os.environ[ENV_SIG_ALG] = pq_sig
+            _b64set(ENV_SIG_PUB_B64, sig_pub)
+            _b64set(ENV_SIG_PRIV_ENC_B64, sig_enc)
+            exports.append((ENV_SIG_ALG, pq_sig))
+            exports.append((ENV_SIG_PUB_B64, base64.b64encode(sig_pub).decode()))
+            exports.append((ENV_SIG_PRIV_ENC_B64, base64.b64encode(sig_enc).decode()))
+            logger.info("Generated PQ signature keypair (%s) to env.", pq_sig)
+        else:
+            if strict_pq2:
+                raise RuntimeError("Strict PQ2 mode: ML-DSA required but oqs unavailable.")
+            kp = ed25519.Ed25519PrivateKey.generate()
+            pub = kp.public_key().public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw
+            )
+            raw = kp.private_bytes(
+                serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption()
+            )
+            enc = _enc_with_label(kek, b"ed25519", raw)
+            os.environ[ENV_SIG_ALG] = "Ed25519"
+            _b64set(ENV_SIG_PUB_B64, pub)
+            _b64set(ENV_SIG_PRIV_ENC_B64, enc)
+            exports.append((ENV_SIG_ALG, "Ed25519"))
+            exports.append((ENV_SIG_PUB_B64, base64.b64encode(pub).decode()))
+            exports.append((ENV_SIG_PRIV_ENC_B64, base64.b64encode(enc).decode()))
+            logger.info("Generated Ed25519 signature keypair to env (fallback).")
+
+    if echo_exports:
+        print("# --- QRS bootstrap exports (persist in your secret store) ---")
+        for k, v in exports:
+            print(f"export {k}='{v}'")
+        print("# ------------------------------------------------------------")
 
 if 'IDENTIFIER_RE' not in globals():
     IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
@@ -357,12 +522,9 @@ def apply_csp(response):
     response.headers['Content-Security-Policy'] = csp_policy
     return response
 
-
 class KeyManager:
-
     encryption_key: Optional[bytes]
     passphrase_env_var: str
-    salt_file_path: Path
     backend: Any
     _pq_alg_name: Optional[str] = None
     x25519_pub: bytes = b""
@@ -372,9 +534,8 @@ class KeyManager:
     sig_alg_name: Optional[str] = None
     sig_pub: Optional[bytes] = None
     _sig_priv_enc: Optional[bytes] = None
-    hybrid_dir: Path = Path("./pq_hybrid_keys")
-    sig_dir: Path = Path("./pq_sign_keys")
     sealed_store: Optional["SealedStore"] = None
+    # note: no on-disk dirs/paths anymore
 
     def _oqs_kem_name(self) -> Optional[str]: ...
     def _load_or_create_hybrid_keys(self) -> None: ...
@@ -385,17 +546,11 @@ class KeyManager:
     def sign_blob(self, data: bytes) -> bytes: ...
     def verify_blob(self, pub: bytes, sig_bytes: bytes, data: bytes) -> bool: ...
 
-    def __init__(self,
-                 passphrase_env_var='ENCRYPTION_PASSPHRASE',
-                 salt_file_path='./encryption_salt_key.key'):
+    def __init__(self, passphrase_env_var: str = 'ENCRYPTION_PASSPHRASE'):
         self.encryption_key = None
         self.passphrase_env_var = passphrase_env_var
-        self.salt_file_path = Path(salt_file_path)
         self.backend = default_backend()
-        self._sealed_cache: Optional[SealedCache] = None      
-        self._sealed_store: Optional["SealedStore"] = None    
-        self._load_encryption_key()
-        self._sealed_cache = None
+        self._sealed_cache: Optional[SealedCache] = None
         self._pq_alg_name = None
         self.x25519_pub = b""
         self._x25519_priv_enc = b""
@@ -404,10 +559,7 @@ class KeyManager:
         self.sig_alg_name = None
         self.sig_pub = None
         self._sig_priv_enc = None
-        self.hybrid_dir = Path("./pq_hybrid_keys")
-        self.sig_dir = Path("./pq_sign_keys")
         self.sealed_store = None
-
         self._load_encryption_key()
 
     def _load_encryption_key(self):
@@ -416,38 +568,14 @@ class KeyManager:
 
         passphrase = os.getenv(self.passphrase_env_var)
         if not passphrase:
-            logger.critical(
-                f"The environment variable {self.passphrase_env_var} is not set."
-            )
-            raise ValueError(
-                f"No {self.passphrase_env_var} environment variable set")
+            logger.critical(f"The environment variable {self.passphrase_env_var} is not set.")
+            raise ValueError(f"No {self.passphrase_env_var} environment variable set")
 
-        salt_dir = self.salt_file_path.parent
-        salt_dir.mkdir(parents=True, exist_ok=True)
-        salt_dir.chmod(0o700)
-
-        if self.salt_file_path.exists():
-            logger.info(f"Salt file found at {self.salt_file_path}")
-            with self.salt_file_path.open('rb') as salt_file:
-                salt = salt_file.read()
-        else:
-            logger.info(
-                f"Salt file not found, creating a new one at {self.salt_file_path}"
-            )
-            salt = secrets.token_bytes(16)
-            with self.salt_file_path.open('wb') as salt_file:
-                salt_file.write(salt)
-            self.salt_file_path.chmod(0o600)
-
+        salt = _b64get(ENV_SALT_B64, required=True)
         try:
-            kdf = Scrypt(salt=salt,
-                         length=32,
-                         n=65536,
-                         r=8,
-                         p=1,
-                         backend=self.backend)
+            kdf = Scrypt(salt=salt, length=32, n=65536, r=8, p=1, backend=self.backend)
             self.encryption_key = kdf.derive(passphrase.encode())
-            logger.info("Encryption key successfully derived.")
+            logger.info("Encryption key successfully derived (env salt).")
         except Exception as e:
             logger.error(f"Failed to derive encryption key: {e}")
             raise
@@ -694,7 +822,8 @@ class SealedRecord:
 
 class SealedStore:
     def __init__(self, km: "KeyManager"):
-        self.km = km; SEALED_DIR.mkdir(parents=True, exist_ok=True)
+        self.km = km  # no dirs/files created
+
     def _derive_split_kek(self, base_kek: bytes) -> bytes:
         shards_b64 = os.getenv(SHARDS_ENV, "")
         if shards_b64:
@@ -707,46 +836,66 @@ class SealedStore:
         else:
             secret = b"\x00"*32
         return hkdf_sha3(base_kek + secret, info=b"QRS|split-kek|v1", length=32)
+
     def _seal(self, kek: bytes, data: dict) -> bytes:
         jj = json.dumps(data, separators=(",",":")).encode()
-        n = secrets.token_bytes(12); ct = AESGCM(kek).encrypt(n, jj, b"sealed")
+        n = secrets.token_bytes(12)
+        ct = AESGCM(kek).encrypt(n, jj, b"sealed")
         return json.dumps({"v":SEALED_VER,"n":b64e(n),"ct":b64e(ct)}, separators=(",",":")).encode()
+
     def _unseal(self, kek: bytes, blob: bytes) -> dict:
-        obj = json.loads(blob.decode()); 
+        obj = json.loads(blob.decode())
         if obj.get("v") != SEALED_VER: raise ValueError("sealed ver mismatch")
         n = b64d(obj["n"]); ct = b64d(obj["ct"])
         pt = AESGCM(kek).decrypt(n, ct, b"sealed")
         return json.loads(pt.decode())
-    def exists(self) -> bool: return SEALED_FILE.exists()
+
+    def exists(self) -> bool:
+        return bool(os.getenv(ENV_SEALED_B64))
+
     def save_from_current_keys(self):
         try:
             x_priv = self.km._decrypt_x25519_priv().private_bytes(
                 encoding=serialization.Encoding.Raw,
                 format=serialization.PrivateFormat.Raw,
-                encryption_algorithm=serialization.NoEncryption())
+                encryption_algorithm=serialization.NoEncryption()
+            )
             pq_priv = self.km._decrypt_pq_priv() or b""
             sig_priv = self.km._decrypt_sig_priv()
-            rec = {"v":SEALED_VER,"created_at":int(time.time()),"kek_ver":1,
-                   "kem_alg": self.km._pq_alg_name or "", "sig_alg": self.km.sig_alg_name or "",
-                   "x25519_priv": b64e(x_priv), "pq_priv": b64e(pq_priv), "sig_priv": b64e(sig_priv)}
+
+            rec = {
+                "v": SEALED_VER, "created_at": int(time.time()), "kek_ver": 1,
+                "kem_alg": self.km._pq_alg_name or "", "sig_alg": self.km.sig_alg_name or "",
+                "x25519_priv": b64e(x_priv), "pq_priv": b64e(pq_priv), "sig_priv": b64e(sig_priv)
+            }
+
             passphrase = os.getenv(self.km.passphrase_env_var) or ""
-            salt = self.km.salt_file_path.read_bytes()
-            base_kek = hash_secret_raw(passphrase.encode(), salt, 3, 512*1024, max(2, (os.cpu_count() or 2)//2), 32, ArgonType.ID)
-            split_kek = self._derive_split_kek(base_kek)
-            SEALED_FILE.write_bytes(self._seal(split_kek, rec)); SEALED_FILE.chmod(0o600)
-        except Exception as e:
-            logger.error(f"Sealed save failed: {e}", exc_info=True)
-    
-    def load_into_km(self) -> bool:
-        try:
-            passphrase = os.getenv(self.km.passphrase_env_var) or ""
-            salt = self.km.salt_file_path.read_bytes()
+            salt = _b64get(ENV_SALT_B64, required=True)
             base_kek = hash_secret_raw(
                 passphrase.encode(), salt,
                 3, 512*1024, max(2, (os.cpu_count() or 2)//2), 32, ArgonType.ID
             )
             split_kek = self._derive_split_kek(base_kek)
-            rec = self._unseal(split_kek, SEALED_FILE.read_bytes())
+            blob = self._seal(split_kek, rec)
+            _b64set(ENV_SEALED_B64, blob)
+            logger.info("Sealed store saved to env.")
+        except Exception as e:
+            logger.error(f"Sealed save failed: {e}", exc_info=True)
+
+    def load_into_km(self) -> bool:
+        try:
+            blob = _b64get(ENV_SEALED_B64, required=False)
+            if not blob:
+                return False
+
+            passphrase = os.getenv(self.km.passphrase_env_var) or ""
+            salt = _b64get(ENV_SALT_B64, required=True)
+            base_kek = hash_secret_raw(
+                passphrase.encode(), salt,
+                3, 512*1024, max(2, (os.cpu_count() or 2)//2), 32, ArgonType.ID
+            )
+            split_kek = self._derive_split_kek(base_kek)
+            rec = self._unseal(split_kek, blob)
 
             cache: SealedCache = {
                 "x25519_priv_raw": b64d(rec["x25519_priv"]),
@@ -754,19 +903,18 @@ class SealedStore:
                 "sig_priv_raw": b64d(rec["sig_priv"]),
                 "kem_alg": rec.get("kem_alg", ""),
                 "sig_alg": rec.get("sig_alg", ""),
-         }
-
+            }
             self.km._sealed_cache = cache
             if cache.get("kem_alg"):
                 self.km._pq_alg_name = cache["kem_alg"] or None
             if cache.get("sig_alg"):
                 self.km.sig_alg_name = cache["sig_alg"] or self.km.sig_alg_name
 
+            logger.info("Sealed store loaded from env into KeyManager cache.")
             return True
         except Exception as e:
             logger.error(f"Sealed load failed: {e}")
             return False
-
 def _km_oqs_kem_name(self) -> Optional[str]:
     if oqs is None:
         return None
@@ -779,8 +927,7 @@ def _km_oqs_kem_name(self) -> Optional[str]:
             continue
     return None
 
-_KM = cast(Any, KeyManager)
-_KM._oqs_kem_name = _km_oqs_kem_name  
+
 
 
 def _try(f: Callable[[], Any]) -> bool:
@@ -794,144 +941,137 @@ def _try(f: Callable[[], Any]) -> bool:
 STRICT_PQ2_ONLY = bool(int(os.getenv("STRICT_PQ2_ONLY", "1")))
 
 def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
-    passphrase = os.getenv(self.passphrase_env_var)
-    if not passphrase:
-        raise ValueError(f"No {self.passphrase_env_var} set")
+    """
+    Populate hybrid (x25519 + optional PQ KEM) key handles from ENV,
+    falling back to the sealed cache when present. No files are touched.
+    """
+    cache = getattr(self, "_sealed_cache", None)
 
-    salt = self.salt_file_path.read_bytes()
-    kek = hash_secret_raw(
-        passphrase.encode("utf-8"),
-        salt,
-        time_cost=3,
-        memory_cost=512 * 1024,
-        parallelism=max(2, (os.cpu_count() or 2) // 2),
-        hash_len=32,
-        type=ArgonType.ID,
-    )
-    aes = AESGCM(kek)
+    # ---- X25519 ----
+    x_pub_b   = _b64get(ENV_X25519_PUB_B64, required=False)
+    x_privenc = _b64get(ENV_X25519_PRIV_ENC_B64, required=False)
 
-    self.hybrid_dir = Path("./pq_hybrid_keys")
-    self.hybrid_dir.mkdir(parents=True, exist_ok=True)
-
-    x_pub_path  = self.hybrid_dir / "x25519_pub.bin"
-    x_priv_path = self.hybrid_dir / "x25519_priv.bin.enc"
-
-    if x_pub_path.exists() and x_priv_path.exists():
-        self.x25519_pub = x_pub_path.read_bytes()
-        self._x25519_priv_enc = x_priv_path.read_bytes()
+    if x_pub_b:
+        # Env has the raw public key
+        self.x25519_pub = x_pub_b
+    elif cache and cache.get("x25519_priv_raw"):
+        # Derive pub from sealed raw private (env didn't provide pub)
+        self.x25519_pub = (
+            x25519.X25519PrivateKey
+            .from_private_bytes(cache["x25519_priv_raw"])
+            .public_key()
+            .public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        )
+        logger.info("x25519 public key derived from sealed cache.")
     else:
-        x_priv = x25519.X25519PrivateKey.generate()
-        x_pub = x_priv.public_key().public_bytes(
-            serialization.Encoding.Raw,
-            serialization.PublicFormat.Raw,
-        )
-        n = secrets.token_bytes(12)
-        x_priv_raw = x_priv.private_bytes(
-            serialization.Encoding.Raw,
-            serialization.PrivateFormat.Raw,
-            serialization.NoEncryption(),
-        )
-        x_priv_enc = n + aes.encrypt(n, x_priv_raw, b"x25519")
+        raise RuntimeError("x25519 key material not found (neither ENV nor sealed cache).")
 
-        x_pub_path.write_bytes(x_pub)
-        x_priv_path.write_bytes(x_priv_enc)
-        try:
-            x_pub_path.chmod(0o600)
-            x_priv_path.chmod(0o600)
-        except Exception:
-            pass
+    # If env doesn't carry the encrypted private, leave it empty;
+    # _decrypt_x25519_priv() will use the sealed cache path.
+    self._x25519_priv_enc = x_privenc or b""
 
-        self.x25519_pub = x_pub
-        self._x25519_priv_enc = x_priv_enc
+    # ---- PQ KEM (ML-KEM) ----
+    # Prefer ENV alg; fall back to sealed cache hint
+    self._pq_alg_name = os.getenv(ENV_PQ_KEM_ALG) or None
+    if not self._pq_alg_name and cache and cache.get("kem_alg"):
+        self._pq_alg_name = str(cache["kem_alg"]) or None
 
-    
-    self._pq_alg_name = None
-    self.pq_pub = None
-    self._pq_priv_enc = None
+    pq_pub_b   = _b64get(ENV_PQ_PUB_B64, required=False)
+    pq_privenc = _b64get(ENV_PQ_PRIV_ENC_B64, required=False)
 
-    try_name = _km_oqs_kem_name(self)
-    pq_pub_path  = self.hybrid_dir / "pq_pub.bin"
-    pq_priv_path = self.hybrid_dir / "pq_priv.bin.enc"
+    # Store what we have (pub for encap; priv_enc for decap via env path)
+    self.pq_pub       = pq_pub_b or None
+    self._pq_priv_enc = pq_privenc or None
 
-    if try_name:
-        self._pq_alg_name = try_name
-        if pq_pub_path.exists() and pq_priv_path.exists():
-            self.pq_pub = pq_pub_path.read_bytes()
-            self._pq_priv_enc = pq_priv_path.read_bytes()
-        else:
-            if oqs is None:
-                logger.warning("liboqs unavailable; skipping PQ KEM key generation")
-                self._pq_alg_name = None
-            else:
-                try:
-                    oqs_mod = cast(Any, oqs)
-                    with oqs_mod.KeyEncapsulation(try_name) as kem:
-                        pub = kem.generate_keypair()
-                        sk = kem.export_secret_key()
+    # In strict mode we must have: alg + pub + (priv via env or sealed cache)
+    if STRICT_PQ2_ONLY:
+        have_priv = bool(pq_privenc) or bool(cache and cache.get("pq_priv_raw"))
+        if not (self._pq_alg_name and self.pq_pub and have_priv):
+            raise RuntimeError("Strict PQ2 mode: ML-KEM keys not fully available (need alg+pub+priv).")
 
-                    n = secrets.token_bytes(12)
-                    pq_priv_enc = n + aes.encrypt(n, sk, b"pqkem")
-
-                    pq_pub_path.write_bytes(pub)
-                    pq_priv_path.write_bytes(pq_priv_enc)
-                    try:
-                        pq_pub_path.chmod(0o600)
-                        pq_priv_path.chmod(0o600)
-                    except Exception:
-                        pass
-
-                    self.pq_pub = pub
-                    self._pq_priv_enc = pq_priv_enc
-                except Exception as e:
-                    logger.error(f"PQ KEM key generation failed: {e}", exc_info=True)
-                    self._pq_alg_name = None
-                    self.pq_pub = None
-                    self._pq_priv_enc = None
-
-
-    if STRICT_PQ2_ONLY and (
-        self._pq_alg_name is None or self.pq_pub is None or self._pq_priv_enc is None
-    ):
-        raise RuntimeError(
-            "Strict PQ2 mode: ML-KEM unavailable; ensure liboqs is installed and accessible."
-        )
-        
+    # Log what we ended up with (helps debugging)
+    logger.info(
+        "Hybrid keys loaded: x25519_pub=%s, pq_alg=%s, pq_pub=%s, pq_priv=%s (sealed=%s)",
+        "yes" if self.x25519_pub else "no",
+        self._pq_alg_name or "none",
+        "yes" if self.pq_pub else "no",
+        "yes" if (pq_privenc or (cache and cache.get('pq_priv_raw'))) else "no",
+        "yes" if cache else "no",
+    )
 
 def _km_decrypt_x25519_priv(self: "KeyManager") -> x25519.X25519PrivateKey:
-    cache = self._sealed_cache
+    cache = getattr(self, "_sealed_cache", None)
     if cache is not None and "x25519_priv_raw" in cache:
-        raw = cache["x25519_priv_raw"] 
+        raw = cache["x25519_priv_raw"]
         return x25519.X25519PrivateKey.from_private_bytes(raw)
 
-    x_enc = cast(bytes, getattr(self, "_x25519_priv_enc"))  
+    x_enc = cast(bytes, getattr(self, "_x25519_priv_enc"))
     passphrase = os.getenv(self.passphrase_env_var) or ""
-    salt = self.salt_file_path.read_bytes()
+    salt = _b64get(ENV_SALT_B64, required=True)
     kek = hash_secret_raw(passphrase.encode(), salt, 3, 512*1024, max(2, (os.cpu_count() or 2)//2), 32, ArgonType.ID)
     aes = AESGCM(kek)
     n, ct = x_enc[:12], x_enc[12:]
     raw = aes.decrypt(n, ct, b"x25519")
     return x25519.X25519PrivateKey.from_private_bytes(raw)
-
-def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
-    cache = getattr(self, "_sealed_cache", None)
-    if cache is not None:
-        return cache.get("pq_priv_raw")
-    if not (getattr(self, "_pq_alg_name", None) and getattr(self, "_pq_priv_enc", None)):
-        return None
     
-    pq_alg = cast(Optional[str], getattr(self, "_pq_alg_name", None))
-    pq_enc = cast(Optional[bytes], getattr(self, "_pq_priv_enc", None))
+def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
+    """
+    Return the raw ML-KEM private key bytes suitable for oqs decapsulation.
+    Prefers sealed cache; falls back to ENV-encrypted key if present.
+    """
+    # Prefer sealed cache (already raw)
+    cache = getattr(self, "_sealed_cache", None)
+    if cache is not None and cache.get("pq_priv_raw") is not None:
+        return cache.get("pq_priv_raw")
+
+    # Otherwise try the env-encrypted private key
+    pq_alg = getattr(self, "_pq_alg_name", None)
+    pq_enc = getattr(self, "_pq_priv_enc", None)
     if not (pq_alg and pq_enc):
-        return None 
+        return None
 
     passphrase = os.getenv(self.passphrase_env_var) or ""
-    salt = self.salt_file_path.read_bytes()
-    kek = hash_secret_raw(passphrase.encode(), salt, 3, 512*1024, max(2, (os.cpu_count() or 2)//2), 32, ArgonType.ID)
+    salt = _b64get(ENV_SALT_B64, required=True)
+    kek = hash_secret_raw(
+        passphrase.encode(), salt,
+        3, 512 * 1024, max(2, (os.cpu_count() or 2) // 2),
+        32, ArgonType.ID
+    )
     aes = AESGCM(kek)
-
     n, ct = pq_enc[:12], pq_enc[12:]
     return aes.decrypt(n, ct, b"pqkem")
-    
+
+
+def _km_decrypt_sig_priv(self: "KeyManager") -> bytes:
+    """
+    Decrypts signature SK from ENV using Argon2id(passphrase + ENV_SALT_B64).
+    If a sealed_cache is present, returns raw from cache.
+    """
+    # Prefer sealed cache if available
+    cache = getattr(self, "_sealed_cache", None)
+    if cache is not None and "sig_priv_raw" in cache:
+        return cache["sig_priv_raw"]
+
+    sig_enc = getattr(self, "_sig_priv_enc", None)
+    if not sig_enc:
+        raise RuntimeError("Signature private key not available in env.")
+
+    passphrase = os.getenv(self.passphrase_env_var) or ""
+    if not passphrase:
+        raise RuntimeError(f"{self.passphrase_env_var} not set")
+
+    salt = _b64get(ENV_SALT_B64, required=True)
+    kek = hash_secret_raw(
+        passphrase.encode(), salt,
+        3, 512 * 1024, max(2, (os.cpu_count() or 2)//2),
+        32, ArgonType.ID
+    )
+    aes = AESGCM(kek)
+
+    n, ct = sig_enc[:12], sig_enc[12:]
+    label = b"pqsig" if (self.sig_alg_name or "").startswith(("ML-DSA", "Dilithium")) else b"ed25519"
+    return aes.decrypt(n, ct, label)
+
 def _oqs_sig_name() -> Optional[str]:
     if oqs is None:
         return None
@@ -945,68 +1085,73 @@ def _oqs_sig_name() -> Optional[str]:
     return None
 
 
-def _km_load_or_create_signing(self: "KeyManager"):
-    passphrase = os.getenv(self.passphrase_env_var) or ""
-    salt = self.salt_file_path.read_bytes()
-    kek = hash_secret_raw(passphrase.encode(), salt, 3, 512*1024, max(2, (os.cpu_count() or 2)//2), 32, ArgonType.ID)
-    aes = AESGCM(kek)
-    self.sig_dir = Path("./pq_sign_keys"); self.sig_dir.mkdir(parents=True, exist_ok=True)
-    sig_pub_path  = self.sig_dir / "sig_pub.bin"
-    sig_priv_path = self.sig_dir / "sig_priv.bin.enc"
-    meta_path     = self.sig_dir / "alg.txt"
+def _km_load_or_create_signing(self: "KeyManager") -> None:
+    """
+    ENV-only:
+      - Reads PQ/Ed25519 signing keys from ENV, or creates+stores them in ENV if missing.
+      - Private key is AESGCM( Argon2id( passphrase + ENV_SALT_B64 ) ).
+    Requires bootstrap_env_keys() to have set ENV_SALT_B64 at minimum.
+    """
+    # Try to read from ENV first
+    alg = os.getenv(ENV_SIG_ALG) or None
+    pub = _b64get(ENV_SIG_PUB_B64, required=False)
+    enc = _b64get(ENV_SIG_PRIV_ENC_B64, required=False)
 
-    try_pq = _oqs_sig_name()
-    if try_pq and oqs is not None:
-        oqs_mod = cast(Any, oqs)
-        if sig_pub_path.exists() and sig_priv_path.exists() and meta_path.exists():
-            self.sig_alg_name = meta_path.read_text().strip()
-            self.sig_pub = sig_pub_path.read_bytes(); self._sig_priv_enc = sig_priv_path.read_bytes()
+    if not (alg and pub and enc):
+        # Need to generate keys and place into ENV
+        passphrase = os.getenv(self.passphrase_env_var) or ""
+        if not passphrase:
+            raise RuntimeError(f"{self.passphrase_env_var} not set")
+
+        salt = _b64get(ENV_SALT_B64, required=True)
+        kek = hash_secret_raw(
+            passphrase.encode(), salt,
+            3, 512 * 1024, max(2, (os.cpu_count() or 2)//2),
+            32, ArgonType.ID
+        )
+        aes = AESGCM(kek)
+
+        try_pq = _oqs_sig_name() if oqs is not None else None
+        if try_pq:
+            # Generate PQ signature (ML-DSA/Dilithium)
+            with oqs.Signature(try_pq) as s:  # type: ignore[attr-defined]
+                pub_raw = s.generate_keypair()
+                sk_raw  = s.export_secret_key()
+            n = secrets.token_bytes(12)
+            enc_raw = n + aes.encrypt(n, sk_raw, b"pqsig")
+            os.environ[ENV_SIG_ALG] = try_pq
+            _b64set(ENV_SIG_PUB_B64, pub_raw)
+            _b64set(ENV_SIG_PRIV_ENC_B64, enc_raw)
+            alg, pub, enc = try_pq, pub_raw, enc_raw
+            logger.info("Generated PQ signature keypair (%s) into ENV.", try_pq)
         else:
-            with oqs_mod.Signature(try_pq) as sig:
-                pub = sig.generate_keypair()
-                sk = sig.export_secret_key()
-            n = secrets.token_bytes(12); enc = n + aes.encrypt(n, sk, b"pqsig")
-            sig_pub_path.write_bytes(pub); sig_priv_path.write_bytes(enc); meta_path.write_text(try_pq)
-            self.sig_alg_name = try_pq; self.sig_pub = pub; self._sig_priv_enc = enc
-    else:
-     
-        if STRICT_PQ2_ONLY:
-            raise RuntimeError("Strict PQ2 mode: ML-DSA signature not available; ensure liboqs is installed.")
-        
-        if sig_pub_path.exists() and sig_priv_path.exists() and meta_path.exists():
-            self.sig_alg_name = meta_path.read_text().strip()
-            self.sig_pub = sig_pub_path.read_bytes(); self._sig_priv_enc = sig_priv_path.read_bytes()
-        else:
-            kp = ed25519.Ed25519PrivateKey.generate()
-            pub = kp.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-            raw = kp.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
-            n = secrets.token_bytes(12); enc = n + aes.encrypt(n, raw, b"ed25519")
-            sig_pub_path.write_bytes(pub); sig_priv_path.write_bytes(enc); meta_path.write_text("Ed25519")
-            self.sig_alg_name = "Ed25519"; self.sig_pub = pub; self._sig_priv_enc = enc
+            if STRICT_PQ2_ONLY:
+                raise RuntimeError("Strict PQ2 mode: ML-DSA signature required, but oqs unavailable.")
+            # Ed25519 fallback
+            kp  = ed25519.Ed25519PrivateKey.generate()
+            pub_raw = kp.public_key().public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw
+            )
+            sk_raw  = kp.private_bytes(
+                serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
+                serialization.NoEncryption()
+            )
+            n = secrets.token_bytes(12)
+            enc_raw = n + aes.encrypt(n, sk_raw, b"ed25519")
+            os.environ[ENV_SIG_ALG] = "Ed25519"
+            _b64set(ENV_SIG_PUB_B64, pub_raw)
+            _b64set(ENV_SIG_PRIV_ENC_B64, enc_raw)
+            alg, pub, enc = "Ed25519", pub_raw, enc_raw
+            logger.info("Generated Ed25519 signature keypair into ENV (fallback).")
 
+    # Cache into the instance
+    self.sig_alg_name = alg
+    self.sig_pub = pub
+    self._sig_priv_enc = enc
 
-def _km_decrypt_sig_priv(self: "KeyManager") -> bytes:
-    cache = getattr(self, "_sealed_cache", None)
-    if cache is not None and "sig_priv_raw" in cache:
-        return cache["sig_priv_raw"]  
+    if STRICT_PQ2_ONLY and not (self.sig_alg_name or "").startswith(("ML-DSA", "Dilithium")):
+        raise RuntimeError("Strict PQ2 mode: ML-DSA (Dilithium) signature required in env.")
 
-    sig_enc = cast(Optional[bytes], getattr(self, "_sig_priv_enc", None))
-    if not sig_enc:
-        raise RuntimeError("Signature private key not available")
-
-    passphrase = os.getenv(self.passphrase_env_var) or ""
-    salt = self.salt_file_path.read_bytes()
-    kek = hash_secret_raw(
-        passphrase.encode(),
-        salt,
-        3, 512 * 1024, max(2, (os.cpu_count() or 2) // 2),
-        32, ArgonType.ID
-    )
-    aes = AESGCM(kek)
-
-    n, ct = sig_enc[:12], sig_enc[12:]
-    label = b"pqsig" if (getattr(self, "sig_alg_name", "") or "").startswith("ML-DSA") else b"ed25519"
-    return aes.decrypt(n, ct, label)
 
 def _km_sign(self, data: bytes) -> bytes:
     if (getattr(self, "sig_alg_name", "") or "").startswith("ML-DSA"):
@@ -1034,20 +1179,18 @@ def _km_verify(self, pub: bytes, sig_bytes: bytes, data: bytes) -> bool:
     except Exception:
         return False
 
+# === Bind KeyManager monkeypatched methods (do this once, at the end) ===
+# === Bind KeyManager monkeypatched methods (ENV-only) ===
 _KM = cast(Any, KeyManager)
-
 _KM._oqs_kem_name               = _km_oqs_kem_name
 _KM._load_or_create_hybrid_keys = _km_load_or_create_hybrid_keys
 _KM._decrypt_x25519_priv        = _km_decrypt_x25519_priv
 _KM._decrypt_pq_priv            = _km_decrypt_pq_priv
-_KM._load_or_create_signing     = _km_load_or_create_signing
-_KM._decrypt_sig_priv           = _km_decrypt_sig_priv
+_KM._load_or_create_signing     = _km_load_or_create_signing   # <-- ENV version
+_KM._decrypt_sig_priv           = _km_decrypt_sig_priv         # <-- ENV version
 _KM.sign_blob                   = _km_sign
 _KM.verify_blob                 = _km_verify
-_KM.sealed = property(
-    fget=lambda self: getattr(self, "_sealed_store", None),
-    fset=lambda self, v: setattr(self, "_sealed_store", v),
-)
+
 
 HD_FILE = Path("./sealed_store/hd_epoch.json")
 
@@ -1124,9 +1267,8 @@ class AuditTrail:
         AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     def _key(self) -> bytes:
-
         passphrase = os.getenv(self.km.passphrase_env_var) or ""
-        salt = self.km.salt_file_path.read_bytes()
+        salt = _b64get(ENV_SALT_B64, required=True)
         base_kek = hash_secret_raw(
             passphrase.encode(),
             salt,
@@ -1141,11 +1283,9 @@ class AuditTrail:
         if isinstance(sealed_store, SealedStore):
             split_kek = sealed_store._derive_split_kek(base_kek)
         else:
-    
             split_kek = hkdf_sha3(base_kek, info=b"QRS|split-kek|v1", length=32)
 
         return hkdf_sha3(split_kek, info=b"QRS|audit|v1", length=32)
-
     def _last_hash(self) -> str:
         try:
             with AUDIT_FILE.open("rb") as f:
@@ -1229,8 +1369,33 @@ class AuditTrail:
             logger.error(f"audit tail failed: {e}", exc_info=True)
         return out
 
+# 1) Generate any missing keys/salt/signing material into ENV (no files)
+bootstrap_env_keys(
+    strict_pq2=STRICT_PQ2_ONLY,
+    echo_exports=bool(int(os.getenv("QRS_BOOTSTRAP_SHOW","0")))
+)
+
+# 2) Proceed as usual, but everything now comes from ENV
 key_manager = KeyManager()
 encryption_key = key_manager.get_key()
+key_manager._sealed_cache = None
+key_manager.sealed_store = SealedStore(key_manager)
+
+# (Optional sealed cache in ENV – doesn't create files)
+if not key_manager.sealed_store.exists() and os.getenv("QRS_ENABLE_SEALED","1")=="1":
+    key_manager._load_or_create_hybrid_keys()
+    key_manager._load_or_create_signing()
+    key_manager.sealed_store.save_from_current_keys()
+if key_manager.sealed_store.exists():
+    key_manager.sealed_store.load_into_km()
+
+# Ensure runtime key handles are populated from ENV (no file paths)
+key_manager._load_or_create_hybrid_keys()
+key_manager._load_or_create_signing()
+
+audit = AuditTrail(key_manager)
+audit.append("boot", {"sealed_loaded": bool(getattr(key_manager, "_sealed_cache", None))})
+
 key_manager._sealed_cache = None
 key_manager.sealed_store = SealedStore(key_manager)
 if not key_manager.sealed_store.exists() and os.getenv("QRS_ENABLE_SEALED","1")=="1":
@@ -3075,414 +3240,145 @@ def home():
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>QRS - Quantum Road Scanner</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
-          integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-    <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
-          integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-          integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
-          integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
-    <style>
-        body {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            color: #ffffff;
-            font-family: 'Roboto', sans-serif;
-        }
-        .navbar {
-            background: rgba(0, 0, 0, 0.5);
-        }
-        .navbar-brand {
-            font-family: 'Orbitron', sans-serif;
-            font-size: 2rem;
-            background: -webkit-linear-gradient(#f0f, #0ff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .content {
-            padding: 60px 20px;
-        }
-        .blog-post {
-            background: rgba(255, 255, 255, 0.1);
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-        }
-        .btn-custom {
-            background: linear-gradient(45deg, #f0f, #0ff);
-            border: none;
-            color: #fff;
-            padding: 10px 20px;
-            border-radius: 50px;
-            transition: background 0.3s;
-        }
-        .gradient-text {
-            background: -webkit-linear-gradient(#f0f, #0ff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            font-family: 'Orbitron', sans-serif;
-        }            
-        .btn-custom:hover {
-            background: linear-gradient(45deg, #0ff, #f0f);
-            color: #000;
-        }
-        @media (max-width: 768px) {
-            .navbar-brand {
-                font-size: 1.5rem;
-            }
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <title>Quantum Road Scanner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
+        integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
+        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
+        integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+  <style>
+    :root { --accent:#00d1ff; --bg1:#0f1b2b; --bg2:#17263b; --ink:#eaf5ff; }
+    body { background: radial-gradient(1200px 700px at 20% -10%, #1b3252, #0a1422 55%),
+                     linear-gradient(135deg, var(--bg1), var(--bg2));
+           color: var(--ink); font-family: 'Roboto', system-ui, -apple-system, Segoe UI, sans-serif; }
+    .navbar { background: rgba(0,0,0,.35); backdrop-filter: blur(6px); }
+    .navbar-brand { font-family: 'Orbitron', sans-serif; letter-spacing:.5px; }
+    .hero h1 { font-family:'Orbitron',sans-serif; font-weight:700; line-height:1.05;
+               background: linear-gradient(90deg,#a9d3ff, #6ee7ff, #a9d3ff);
+               -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .card-clear { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08);
+                  border-radius: 14px; }
+    .pill { display:inline-block; padding:.25rem .6rem; border-radius:999px;
+            background: rgba(255,255,255,.08); font-size:.85rem; }
+    .step-num { width:28px;height:28px;border-radius:50%;display:inline-grid;place-items:center;
+                background: #1b4a64;color:#d8f6ff;font-weight:700;margin-right:.5rem; }
+    .cta { background: linear-gradient(135deg, #28e0a9, #00b3ff); color:#04121f; border:0;
+           padding:.75rem 1.1rem; border-radius:10px; font-weight:700; }
+    a, a:visited { color:#9be5ff; }
+    .footnote { color:#b8cfe4; font-size:.95rem; }
+    .soft { color:#cfe8ff; }
+  </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark fixed-top">
-        <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
-        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" 
-            aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-            <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse justify-content-end" id="navbarNav">
-            <ul class="navbar-nav">
-                {% if 'username' in session %}
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
-                    </li>
-                {% else %}
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('login') }}">Login</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('register') }}">Register</a>
-                    </li>
-                {% endif %}
-            </ul>
-        </div>
-    </nav>
-
-    <div class="container content">
-        <div class="text-center mb-5">
-            <br><br>
-            <h1 class="display-4 gradient-text">Quantum Road Scanner</h1>
-            <p class="lead">Enhancing Road Safety through Quantum Simulations and Hypertime Analysis</p>
-        </div>
-
-        <div class="section">
-            <h3 class="section-title">Introduction</h3>
-            <p>
-                The Quantum Road Scanner (QRS) is an innovative system that leverages quantum computing, advanced algorithms, and concepts from hypertime physics to simulate road conditions in real-time. By generating and analyzing simulated data, QRS provides comprehensive assessments of potential hazards without collecting, storing, or retaining any user data. The system operates within a quantum-zoned environment with noise protections to ensure accuracy and privacy.
-            </p>
-            <p>
-                QRS represents a significant advancement in applying theoretical physics to practical challenges. It builds upon foundational research in quantum mechanics, computational physics, and hypertime theories to offer novel solutions for road safety and traffic management.
-            </p>
-        </div>
-
-        <div class="section">
-            <h3 class="section-title">Historical Background and Innovations</h3>
-            <p>
-                The development of QRS is rooted in the evolution of quantum mechanics and computational theories. Key milestones include:
-            </p>
-            <ul>
-                <li>
-                    <strong>Quantum Mechanics Foundations:</strong> The early 20th-century work of scientists like Max Planck and Werner Heisenberg established the principles of quantum mechanics, introducing concepts such as wave-particle duality and the uncertainty principle.
-                </li>
-                <li>
-                    <strong>Quantum Computing Conceptualization:</strong> In the 1980s, physicist Richard Feynman proposed the idea of quantum computers, suggesting that quantum systems could simulate physical processes more efficiently than classical computers (<a href="#ref1">[1]</a>).
-                </li>
-                <li>
-                    <strong>Development of Quantum Algorithms:</strong> Algorithms like Shor's algorithm (1994) for integer factorization and Grover's algorithm (1996) for database search demonstrated the potential of quantum computing to solve complex problems more efficiently (<a href="#ref2">[2]</a>, <a href="#ref3">[3]</a>).
-                </li>
-                <li>
-                    <strong>Hypertime Theories:</strong> The concept of hypertime emerged as physicists explored models with multiple temporal dimensions, such as in certain interpretations of string theory and M-theory (<a href="#ref4">[4]</a>).
-                </li>
-                <li>
-                    <strong>Quantum Simulations in Traffic Systems:</strong> Researchers began applying quantum simulations to model complex systems, including traffic flow and congestion patterns, recognizing the limitations of classical models in handling the stochastic nature of traffic (<a href="#ref5">[5]</a>).
-                </li>
-            </ul>
-            <p>
-                These foundational advancements paved the way for the creation of QRS, which integrates these concepts to simulate road conditions and enhance safety measures.
-            </p>
-        </div>
-
-        <div class="section">
-            <h3 class="section-title">My Contribution and Learning Journey</h3>
-            <p>
-                My journey with QRS began during my research into quantum computing applications. Fascinated by the potential of quantum simulations, I sought to apply these principles to real-world challenges. Learning from the experts at BlaiseLabs, I delved deep into advanced quantum algorithms and hypertime analysis.
-            </p>
-            <p>
-                At BlaiseLabs, we focused on overcoming key challenges:
-            </p>
-            <ul>
-                <li>
-                    <strong>Developing Noise-Resistant Quantum Algorithms:</strong> We worked on creating algorithms that could maintain accuracy in the presence of quantum noise and decoherence.
-                </li>
-                <li>
-                    <strong>Implementing Quantum Error Correction:</strong> We incorporated error correction codes to protect quantum information during simulations.
-                </li>
-                <li>
-                    <strong>Optimizing Hypertime Simulations:</strong> We refined hypertime equations to accurately simulate multiple temporal dimensions without introducing computational inefficiencies.
-                </li>
-            </ul>
-            <p>
-                My contributions involved enhancing the efficiency of these algorithms and ensuring they could operate within the constraints of current quantum computing capabilities. Collaborating with BlaiseLabs allowed me to integrate theoretical knowledge with practical implementation, leading to the development of the QRS system.
-            </p>
-        </div>
-
-        <div class="section">
-            <h3 class="section-title">Hypertime and Multiverse Analysis</h3>
-            <p>
-                Hypertime is a theoretical framework that proposes the existence of additional temporal dimensions beyond our conventional understanding of time. This concept is utilized in QRS to simulate not just linear progression but a spectrum of possible futures.
-            </p>
-            <p>
-                In QRS, hypertime analysis involves:
-            </p>
-            <ul>
-                <li>
-                    <strong>Temporal Dimensions:</strong> Incorporating multiple time dimensions allows the system to explore various potential outcomes simultaneously.
-                </li>
-                <li>
-                    <strong>Probability Amplitudes:</strong> Assigning probability amplitudes to different simulated scenarios to evaluate their likelihood.
-                </li>
-                <li>
-                    <strong>Interference Effects:</strong> Utilizing quantum interference to enhance or suppress certain outcomes based on simulated conditions.
-                </li>
-            </ul>
-            <div class="equation">
-                <strong>Hypertime Wave Function:</strong><br>
-
-            </div>
-            <p>
-
-            </p>
-            <p>
-                By simulating these multiple temporal paths, QRS can provide insights into potential future events on the road, enhancing predictive capabilities without relying on actual data collection.
-            </p>
-        </div>
-
-        <div class="section">
-            <h3 class="section-title">Quantum Algorithms and Computations</h3>
-            <p>
-                The core computational power of QRS lies in its use of advanced quantum algorithms, including:
-            </p>
-            <ul>
-                <li>
-                    <strong>Quantum Fourier Transform (QFT):</strong> A key algorithm for transforming quantum states between time and frequency domains, essential for analyzing periodicities in simulated traffic patterns.
-                    <div class="equation">
-
-                    </div>
-                </li>
-                <li>
-                    <strong>Quantum Walks:</strong> Quantum analogs of classical random walks, used to model the probabilistic movement of vehicles within the simulation (<a href="#ref6">[6]</a>).
-                </li>
-                <li>
-                    <strong>Amplitude Amplification:</strong> An extension of Grover's algorithm, enhancing the probability of desired outcomes within the simulation (<a href="#ref3">[3]</a>).
-                </li>
-                <li>
-                    <strong>Variational Quantum Algorithms:</strong> Hybrid algorithms that use classical optimization techniques with quantum circuits to find minimal risk paths in the simulations (<a href="#ref7">[7]</a>).
-                </li>
-            </ul>
-            <p>
-                These algorithms allow QRS to process complex simulations efficiently, exploring a vast space of possible scenarios to identify optimal safety recommendations.
-            </p>
-        </div>
-
-        <div class="section">
-            <h3 class="section-title">Hypertime Nanobot Simulation</h3>
-            <p>
-                The concept of hypertime nanobots in QRS refers to simulated agents that traverse multiple temporal dimensions within the quantum simulation environment. These nanobots are not physical entities but computational constructs designed to gather and process information across different simulated times.
-            </p>
-            <p>
-                Their functions include:
-            </p>
-            <ul>
-                <li>
-                    <strong>Temporal Data Gathering:</strong> Collecting simulated data from various points in hypertime to understand potential future conditions.
-                </li>
-                <li>
-                    <strong>State Evolution Tracking:</strong> Monitoring how simulated traffic states evolve over hypertime to identify trends.
-                </li>
-                <li>
-                    <strong>Interference Analysis:</strong> Analyzing how different temporal paths may interfere, affecting the probability of certain outcomes.
-                </li>
-            </ul>
-            <div class="equation">
-                <strong>Nanobot State Function:</strong><br>
-
-            </div>
-            <p>
-            </p>
-            <p>
-                By simulating the actions of these nanobots, QRS can enhance the depth and accuracy of its hypertime analysis.
-            </p>
-        </div>
-
-        <div class="section">
-            <h3 class="section-title">Algorithmic Process Overview</h3>
-            <p>
-                The operation of QRS involves several key steps:
-            </p>
-            <div class="algorithm">
-                <ol>
-                    <li><strong>Initialization:</strong> Set up the quantum simulation environment with initial parameters based on theoretical models.</li>
-                    <li><strong>Quantum State Encoding:</strong> Encode the initial simulation conditions into quantum states using qubits.</li>
-                    <li><strong>Hypertime Evolution:</strong> Apply hypertime evolution operators to simulate the progression of the system across multiple temporal dimensions.</li>
-                    <li><strong>Quantum Computation:</strong> Perform computations using algorithms like QFT and quantum walks to analyze the simulated states.</li>
-                    <li><strong>Error Correction:</strong> Implement quantum error correction codes to protect against decoherence and maintain simulation integrity (<a href="#ref8">[8]</a>).</li>
-                    <li><strong>Measurement and Interpretation:</strong> Measure the quantum states to extract meaningful results, interpreting the data to provide actionable insights.</li>
-                    <li><strong>Result Synthesis:</strong> Compile the findings into recommendations for optimal routes and safety measures.</li>
-                </ol>
-            </div>
-            <p>
-                This process enables QRS to efficiently simulate and analyze a multitude of potential scenarios, providing valuable insights without real-world data collection.
-            </p>
-        </div>
-
-        <div class="section">
-            <h3 class="section-title">Quantum Zoning and Noise Protections</h3>
-            <p>
-                Quantum zoning refers to the isolation of quantum computations within a protected environment, shielding them from external disturbances. In QRS, this is crucial for:
-            </p>
-            <ul>
-                <li>
-                    <strong>Maintaining Coherence:</strong> Protecting qubits from decoherence caused by interactions with the environment.
-                </li>
-                <li>
-                    <strong>Ensuring Privacy:</strong> Preventing any external data from entering or leaving the simulation, maintaining complete data isolation.
-                </li>
-                <li>
-                    <strong>Error Mitigation:</strong> Utilizing noise-resistant algorithms and error correction techniques to minimize the impact of quantum noise.
-                </li>
-            </ul>
-            <p>
-                Techniques used include:
-            </p>
-            <ul>
-                <li>
-                    <strong>Topological Quantum Computing:</strong> Employing qubits that are inherently protected from certain types of errors due to their topological properties (<a href="#ref9">[9]</a>).
-                </li>
-                <li>
-                    <strong>Surface Codes:</strong> Implementing error correction codes that can detect and correct errors in a scalable manner (<a href="#ref8">[8]</a>).
-                </li>
-                <li>
-                    <strong>Dynamical Decoupling:</strong> Applying sequences of quantum gates to average out environmental interactions (<a href="#ref10">[10]</a>).
-                </li>
-            </ul>
-            <p>
-                These measures ensure that QRS can perform accurate and reliable simulations, providing trustworthy results without any data leakage.
-            </p>
-        </div>
-
-        <div class="section">
-            <h3 class="section-title">Practical Application</h3>
-            <p>
-                To illustrate how QRS functions in practice, consider the following scenario:
-            </p>
-            <p>
-                A driver is planning a route through an urban area known for unpredictable traffic patterns. Using QRS, the system:
-            </p>
-            <ol>
-                <li>
-                    <strong>Simulates Traffic Conditions:</strong> Generates a multitude of potential traffic scenarios using quantum simulations, considering factors like hypothetical roadworks or simulated accidents.
-                </li>
-                <li>
-                    <strong>Analyzes Hypertime Paths:</strong> Applies hypertime analysis to explore how these scenarios might evolve over different temporal dimensions.
-                </li>
-                <li>
-                    <strong>Computes Optimal Routes:</strong> Uses amplitude amplification to identify routes with the lowest simulated risk and delay.
-                </li>
-                <li>
-                    <strong>Provides Recommendations:</strong> Offers the driver route suggestions based on the simulation results, enhancing safety and efficiency.
-                </li>
-            </ol>
-            <p>
-                This process helps the driver make informed decisions without relying on actual traffic data, ensuring privacy and data security.
-            </p>
-        </div>
-
-        <div class="section">
-            <h3 class="section-title">Future Developments</h3>
-            <p>
-                The potential for QRS extends beyond its current capabilities. Future developments may include:
-            </p>
-            <ul>
-                <li>
-                    <strong>Integration with Quantum Machine Learning:</strong> Combining quantum simulations with machine learning algorithms to improve predictive accuracy (<a href="#ref11">[11]</a>).
-                </li>
-                <li>
-                    <strong>Enhanced Hypertime Models:</strong> Developing more sophisticated hypertime frameworks to simulate even more complex temporal dynamics.
-                </li>
-                <li>
-                    <strong>Scalability Improvements:</strong> Leveraging advancements in quantum hardware to handle larger simulations and more variables.
-                </li>
-                <li>
-                    <strong>Cross-Domain Applications:</strong> Applying the principles of QRS to other fields such as supply chain logistics, environmental modeling, and disaster preparedness.
-                </li>
-            </ul>
-            <p>
-                These advancements could significantly impact how we approach complex systems and predictive modeling.
-            </p>
-        </div>
-
-        <div class="section">
-            <h3 class="section-title">Acknowledgments</h3>
-            <p>
-                The development of QRS has been a collaborative effort, and I would like to acknowledge the contributions of:
-            </p>
-            <ul>
-                <li>
-                    <strong>BlaiseLabs:</strong> For their support and expertise in quantum simulations and theoretical physics.
-                </li>
-                <li>
-                    <strong>Quantum Computing Researchers:</strong> Whose foundational work has made advanced quantum algorithms accessible.
-                </li>
-                <li>
-                    <strong>Theoretical Physicists:</strong> For developing the concepts of hypertime and multiverse theories that underpin our simulations.
-                </li>
-            </ul>
-            <p>
-                Their collective efforts have been instrumental in bringing QRS from a theoretical concept to a practical tool.
-            </p>
-        </div>
-
-        <div class="section">
-            <h3 class="section-title">References</h3>
-            <ul class="references">
-                <li id="ref1">[1] R. Feynman, "Simulating physics with computers," International Journal of Theoretical Physics, vol. 21, no. 6/7, pp. 467–488, 1982.</li>
-                <li id="ref2">[2] P. W. Shor, "Algorithms for quantum computation: Discrete logarithms and factoring," Proceedings 35th Annual Symposium on Foundations of Computer Science, pp. 124–134, 1994.</li>
-                <li id="ref3">[3] L. K. Grover, "A fast quantum mechanical algorithm for database search," Proceedings of the 28th Annual ACM Symposium on Theory of Computing, pp. 212–219, 1996.</li>
-                <li id="ref4">[4] M. B. Green, J. H. Schwarz, and E. Witten, "Superstring Theory," Cambridge Monographs on Mathematical Physics, Cambridge University Press, 1987.</li>
-                <li id="ref5">[5] S. W. Smith, "The Scientist and Engineer's Guide to Digital Signal Processing," California Technical Publishing, 1997.</li>
-                <li id="ref6">[6] A. M. Childs, "Universal computation by quantum walk," Physical Review Letters, vol. 102, no. 18, p. 180501, 2009.</li>
-                <li id="ref7">[7] M. Cerezo et al., "Variational Quantum Algorithms," Nature Reviews Physics, vol. 3, pp. 625–644, 2021.</li>
-                <li id="ref8">[8] A. G. Fowler et al., "Surface codes: Towards practical large-scale quantum computation," Physical Review A, vol. 86, no. 3, p. 032324, 2012.</li>
-                <li id="ref9">[9] A. Y. Kitaev, "Fault-tolerant quantum computation by anyons," Annals of Physics, vol. 303, no. 1, pp. 2–30, 2003.</li>
-                <li id="ref10">[10] L. Viola and S. Lloyd, "Dynamical suppression of decoherence in two-state quantum systems," Physical Review A, vol. 58, no. 4, pp. 2733–2744, 1998.</li>
-                <li id="ref11">[11] J. Biamonte et al., "Quantum machine learning," Nature, vol. 549, pp. 195–202, 2017.</li>
-            </ul>
-
-        </div>
-
-        <div class="text-center mt-5">
-            <a href="https://gitlab.com/graylan01/quantum_road_scanner/-/blob/main/paper.md" class="btn btn-custom btn-lg">Learn More About Quantum Road Scanning</a>
-        </div>
+  <nav class="navbar navbar-expand-lg navbar-dark">
+    <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
+    <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#nav"
+            aria-controls="nav" aria-expanded="false" aria-label="Toggle nav">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div id="nav" class="collapse navbar-collapse justify-content-end">
+      <ul class="navbar-nav">
+        {% if 'username' in session %}
+          <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a></li>
+          <li class="nav-item"><a class="nav-link" href="{{ url_for('logout') }}">Logout</a></li>
+        {% else %}
+          <li class="nav-item"><a class="nav-link" href="{{ url_for('login') }}">Login</a></li>
+          <li class="nav-item"><a class="nav-link" href="{{ url_for('register') }}">Register</a></li>
+        {% endif %}
+      </ul>
     </div>
-            </div>
-        </div>
+  </nav>
 
-    <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
-            integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
-        <script src="{{ url_for('static', filename='js/popper.min.js') }}" integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
-    <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
-            integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+  <main class="container py-5">
+    <section class="hero text-center my-4">
+      <h1 class="display-5">Your Road, Simulated — In The Blink of an Eye</h1>
+      <p class="lead soft mt-3">
+        Hello. I’m your Carl&nbsp;Sagan-style guide. This app runs quick 
+        “what-if” simulations about the road right ahead. It doesn’t need your
+        personal data. It simply imagines nearby possibilities and gives you a short,
+        human-friendly safety note.
+      </p>
+      <a class="btn cta mt-2" href="{{ url_for('dashboard') }}">Open Dashboard</a>
+      <div class="mt-2"><span class="pill">No account? Register from the top-right</span></div>
+    </section>
+
+    <section class="row g-4 mt-4">
+      <div class="col-md-6">
+        <div class="card-clear p-4 h-100">
+          <h3>What it does</h3>
+          <p>
+            Think of this as a friendly co-pilot. You tell it roughly where you are and where
+            you’re going. It then spins up many tiny simulations of the next few minutes on the road
+            and summarizes the most useful bits for you: “Watch for debris,”
+            “Expect a short slowdown,” or “Looks clear.”
+          </p>
+          <p class="footnote">It’s a guide, not a guarantee. Please drive attentively.</p>
+        </div>
+      </div>
+      <div class="col-md-6">
+        <div class="card-clear p-4 h-100">
+          <h3>How it works (plain talk)</h3>
+          <ol class="mb-0">
+            <li class="mb-2"><span class="step-num">1</span> You enter or share your location.</li>
+            <li class="mb-2"><span class="step-num">2</span> You choose vehicle type and destination.</li>
+            <li class="mb-2"><span class="step-num">3</span> The app runs a burst of quick “what-if” runs about the road ahead.</li>
+            <li class="mb-2"><span class="step-num">4</span> It turns those into a short, clear note: hazards, detours (if needed), and a calm recommendation.</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <section class="row g-4 mt-1">
+      <div class="col-md-6">
+        <div class="card-clear p-4 h-100">
+          <h3>Privacy, simply</h3>
+          <ul class="mb-0">
+            <li>No personal data is collected for these simulations.</li>
+            <li>Reports you save are stored in your account only.</li>
+            <li>Old records are automatically cleaned up after a while.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="col-md-6">
+        <div class="card-clear p-4 h-100">
+          <h3>Hear it in a calm voice</h3>
+          <p>
+            Prefer audio? When you open a report, tap <em>Read Report</em>.
+            I’ll speak with a gentle, steady tone — slowly, clearly — like a guided tour through
+            the cosmos of the road ahead.
+          </p>
+          <p class="footnote">You can stop playback at any time. Eyes on the road.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card-clear p-4 mt-4">
+      <h3>Before you start</h3>
+      <ul>
+        <li>This is decision support, not a substitute for safe driving or local laws.</li>
+        <li>If something looks unsafe, it probably is. Choose caution.</li>
+        <li>Don’t interact with the app while the vehicle is moving.</li>
+      </ul>
+      <div class="mt-2">
+        <a class="btn cta" href="{{ url_for('dashboard') }}">Go to Dashboard</a>
+        <span class="pill ml-2">Takes about a half-minute</span>
+      </div>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
+          integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/popper.min.js') }}"
+          integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
+          integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
 </body>
 </html>
     """)
-
-
+    
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     error_message = ""
