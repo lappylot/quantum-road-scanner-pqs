@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Replit
+.replit
+.upm/
+.pythonlibs/
+.python_packages/
+attached_assets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Tests & Coverage
+tests/
+.coverage
+htmlcov/
+
+# Secrets & Sensitive Data
+secure_data.db
+*.db
+encryption_salt_key.key
+pq_hybrid_keys/
+pq_sign_keys/
+sealed_store/
+env.oqs
+
+# Logs
+*.log
