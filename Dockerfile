@@ -1,46 +1,55 @@
+# Python 3.12 to match your project
+FROM python:3.12-slim
 
-# Use a lightweight Python image as the base
-FROM python:3.11-slim
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    OQS_INSTALL_PATH=/usr/local
 
-# Set working directory
+# --- system deps for liboqs & building wheels ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git cmake ninja-build build-essential pkg-config ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# --- build & install liboqs (shared) ---
+RUN git clone --depth=1 --recurse-submodules https://github.com/open-quantum-safe/liboqs /tmp/liboqs \
+ && cmake -S /tmp/liboqs -B /tmp/liboqs/build \
+      -DCMAKE_INSTALL_PREFIX=/usr/local \
+      -DBUILD_SHARED_LIBS=ON \
+      -DOQS_USE_OPENSSL=OFF \
+      -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+      -G Ninja \
+ && cmake --build /tmp/liboqs/build --parallel \
+ && cmake --install /tmp/liboqs/build \
+ && rm -rf /tmp/liboqs
+
+# help the dynamic linker find liboqs
+RUN printf "/usr/local/lib\n" > /etc/ld.so.conf.d/usr-local-lib.conf && ldconfig
+ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+
+# --- app setup ---
 WORKDIR /app
 
-# Copy requirements file and install dependencies
+# install Python deps (make sure liboqs-python is NOT in requirements.txt)
 COPY requirements.txt .
-
-# Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code
+# install the oqs Python wrapper after liboqs exists
+RUN pip install --no-cache-dir "git+https://github.com/open-quantum-safe/liboqs-python@0.12.0"
+
+# copy the rest
 COPY . .
 
-# Ensure static assets are accessible
-RUN mkdir -p /app/static && chmod 755 /app/static
+# create unprivileged user + lock down app dirs (no secrets written here)
+RUN useradd -ms /bin/bash appuser \
+ && mkdir -p /app/static \
+ && chmod 755 /app/static \
+ && chown -R appuser:appuser /app
 
-# Create a non-root user for security
-RUN useradd -ms /bin/bash appuser
-
-# Set up permissions for sensitive directories and files
-# Secure directory for encryption keys
-RUN mkdir -p /home/appuser/.keys && chmod 700 /home/appuser/.keys
-RUN chown -R appuser:appuser /home/appuser/.keys
-
-# Secure directory for database storage
-RUN mkdir -p /home/appuser/data && chmod 700 /home/appuser/data
-RUN chown -R appuser:appuser /home/appuser/data
-
-# If a database file is needed, create it with appropriate permissions
-RUN touch /home/appuser/data/secure_data.db && chmod 600 /home/appuser/data/secure_data.db
-RUN chown appuser:appuser /home/appuser/data/secure_data.db
-
-# Set correct permissions for the /app directory
-RUN chmod -R 755 /app && chown -R appuser:appuser /app
-
-# Switch to the non-root user
 USER appuser
 
-# Expose the port that waitress will listen on
 EXPOSE 3000
 
-# Start the Flask application using waitress
+# Start Flask via waitress
 CMD ["waitress-serve", "--host=0.0.0.0", "--port=3000", "--threads=4", "main:app"]
