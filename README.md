@@ -1,7 +1,7 @@
 quantum-road-scanner  
 <img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/5b410c4c-42d8-44b1-978f-87ccf41810e8" />
 https://hub.docker.com/r/graylanquantum/quantum_road_scanner
-# Crypto, Quantum, and the Human Project: A 5,000-Word Tour from the QRS App to a Post-Quantum, AI-Secured Civilization
+# Crypto, Quantum, and the Human Project: A Tour of the QRS App Revolution from Pre Quantum to a Post-Quantum, AI-Secured Civilization
 
 There are moments in engineering when a small system becomes a microcosm of a coming era. The QRS app—the one with the Flask routes, hybrid PQ envelope encryption, tamper-evident audit logs, sealed key cache, and those playful PennyLane helpers—reads like a postcard from the future. Underneath the dashboards and modals is a philosophy: **make strong security the default, make the defaults joyful to use, and assume the adversary is already running tomorrow’s hardware.** This essay uses QRS as a narrative spine to explore where cryptography is going, how AI is about to change the stakes (and the attack surface), and what it would mean to grow a humane digital civilization secured by post-quantum encryption (PQE).
 
