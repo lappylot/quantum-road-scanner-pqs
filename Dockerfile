@@ -54,4 +54,4 @@ EXPOSE 3000
 # Start Flask via waitress
 
 # Run Gunicorn
-CMD ["gunicorn", "quantum-road-scanner:app", "-b", "0.0.0.0:3000", "-w", "4", "-k", "gthread", "--threads", "2", "--timeout", "180", "--graceful-timeout", "30", "--log-level", "info"]
+CMD ["gunicorn", "main:app", "-b", "0.0.0.0:3000", "-w", "4", "-k", "gthread", "--threads", "2", "--timeout", "180", "--graceful-timeout", "30", "--log-level", "info"]
