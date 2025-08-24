@@ -97,7 +97,29 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 app = Flask(__name__)
+
+class _StartupOnceMiddleware:
+    def __init__(self, wsgi_app):
+        self.wsgi_app = wsgi_app
+        self._did = False
+        self._lock = threading.Lock()
+
+    def __call__(self, environ, start_response):
+        if not self._did:
+            with self._lock:
+                if not self._did:
+                    try:
+                        start_background_jobs_once()
+                    except Exception:
+                        logger.exception("Failed to start background jobs")
+                    else:
+                        self._did = True
+        return self.wsgi_app(environ, start_response)
+
+# install AFTER ProxyFix
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
+app.wsgi_app = _StartupOnceMiddleware(app.wsgi_app)
+
 
 SECRET_KEY = os.getenv("INVITE_CODE_SECRET_KEY")
 if not SECRET_KEY:
@@ -2053,6 +2075,7 @@ def init_app_once():
 # execute once when the worker imports your module
 with app.app_context():
     init_app_once()
+
   
 def is_registration_enabled():
     with config_lock:
@@ -2119,31 +2142,27 @@ def fetch_entropy_logs():
     } for row in logs]
 
     return decrypted_logs
-# Start background jobs once (singleton) across all gunicorn workers on the host.
+
+
 _BG_LOCK_PATH = os.getenv("QRS_BG_LOCK_PATH", "/tmp/qrs_bg.lock")
+_BG_LOCK_HANDLE = None  # keep process-lifetime handle
 
 def start_background_jobs_once() -> None:
-    # Prevent double start inside same process
+    global _BG_LOCK_HANDLE
     if getattr(app, "_bg_started", False):
         return
 
     ok_to_start = True
-    lock_file = None
-
     try:
         if fcntl is not None:
-            # POSIX path: non-blocking exclusive lock; only one worker wins.
-            lock_file = open(_BG_LOCK_PATH, "a+")
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            lock_file.write(f"{os.getpid()}\n")
-            lock_file.flush()
+            _BG_LOCK_HANDLE = open(_BG_LOCK_PATH, "a+")
+            fcntl.flock(_BG_LOCK_HANDLE.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _BG_LOCK_HANDLE.write(f"{os.getpid()}\n"); _BG_LOCK_HANDLE.flush()
         else:
-            # Fallback (Windows / no fcntl): best-effort single-process via env var.
-            ok_to_start = not bool(os.getenv("QRS_BG_STARTED"))
+            ok_to_start = os.environ.get("QRS_BG_STARTED") != "1"
             os.environ["QRS_BG_STARTED"] = "1"
     except Exception:
-        # Another worker owns the lock; do not start.
-        ok_to_start = False
+        ok_to_start = False  # another proc owns it
 
     if ok_to_start:
         threading.Thread(target=rotate_secret_key, daemon=True).start()
@@ -2151,8 +2170,7 @@ def start_background_jobs_once() -> None:
         app._bg_started = True
         logger.info("Background jobs started in PID %s", os.getpid())
     else:
-        logger.info("Background jobs skipped in PID %s (another worker owns the lock)", os.getpid())
-        
+        logger.info("Background jobs skipped in PID %s (another proc owns the lock)", os.getpid())
 
 
 @app.get('/healthz')
@@ -4993,5 +5011,4 @@ async def reverse_geocode_route():
 
 
 if __name__ == '__main__':
-    start_background_jobs_once()
     app.run(host='0.0.0.0', port=3000, debug=False)
