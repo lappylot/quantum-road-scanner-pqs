@@ -12,7 +12,7 @@ from wtforms.validators import DataRequired, Length
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.backends import default_backend
-from waitress import serve
+
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from argon2.low_level import Type
@@ -71,6 +71,11 @@ try:
 except Exception:
     oqs = cast(Any, None)
 
+from werkzeug.middleware.proxy_fix import ProxyFix
+try:
+    import fcntl  # POSIX-only file locking (Linux/macOS). If unavailable, we fall back gracefully.
+except Exception:
+    fcntl = None
 class SealedCache(TypedDict, total=False):
     x25519_priv_raw: bytes
     pq_priv_raw: Optional[bytes]
@@ -92,6 +97,7 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 
 SECRET_KEY = os.getenv("INVITE_CODE_SECRET_KEY")
 if not SECRET_KEY:
@@ -492,8 +498,7 @@ def rotate_secret_key():
 
 BASE_DIR = Path(__file__).parent.resolve()
 
-key_rotation_thread = threading.Thread(target=rotate_secret_key, daemon=True)
-key_rotation_thread.start()
+ 
 
 RATE_LIMIT_COUNT = 13
 RATE_LIMIT_WINDOW = timedelta(minutes=15)
@@ -2097,7 +2102,47 @@ def fetch_entropy_logs():
     } for row in logs]
 
     return decrypted_logs
+# Start background jobs once (singleton) across all gunicorn workers on the host.
+_BG_LOCK_PATH = os.getenv("QRS_BG_LOCK_PATH", "/tmp/qrs_bg.lock")
 
+def start_background_jobs_once() -> None:
+    # Prevent double start inside same process
+    if getattr(app, "_bg_started", False):
+        return
+
+    ok_to_start = True
+    lock_file = None
+
+    try:
+        if fcntl is not None:
+            # POSIX path: non-blocking exclusive lock; only one worker wins.
+            lock_file = open(_BG_LOCK_PATH, "a+")
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_file.write(f"{os.getpid()}\n")
+            lock_file.flush()
+        else:
+            # Fallback (Windows / no fcntl): best-effort single-process via env var.
+            ok_to_start = not bool(os.getenv("QRS_BG_STARTED"))
+            os.environ["QRS_BG_STARTED"] = "1"
+    except Exception:
+        # Another worker owns the lock; do not start.
+        ok_to_start = False
+
+    if ok_to_start:
+        threading.Thread(target=rotate_secret_key, daemon=True).start()
+        threading.Thread(target=delete_expired_data, daemon=True).start()
+        app._bg_started = True
+        logger.info("Background jobs started in PID %s", os.getpid())
+    else:
+        logger.info("Background jobs skipped in PID %s (another worker owns the lock)", os.getpid())
+        
+@app.before_first_request
+def _boot_bg_jobs():
+    start_background_jobs_once()
+
+@app.get('/healthz')
+def healthz():
+    return "ok", 200
 
 def delete_expired_data():
     while True:
@@ -2206,9 +2251,7 @@ def delete_user_data(user_id):
             exc_info=True)
 
 
-data_deletion_thread = threading.Thread(target=delete_expired_data,
-                                        daemon=True)
-data_deletion_thread.start()
+
 
 
 def sanitize_input(user_input):
@@ -4933,5 +4976,7 @@ async def reverse_geocode_route():
             return jsonify({"error": "Internal server error."}), 500
 
 
+
 if __name__ == '__main__':
-    serve(app, host='0.0.0.0', port=3000, threads=4)
+    start_background_jobs_once()
+    app.run(host='0.0.0.0', port=3000, debug=False)
