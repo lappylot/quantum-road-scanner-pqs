@@ -153,6 +153,26 @@ ENV_SEALED_B64            = "QRS_SEALED_B64"           # sealed store JSON (env)
 
 # Small b64 helpers (env <-> bytes)
 
+# --- add this instead ---
+_init_done = False
+_init_lock = threading.Lock()
+
+def init_app_once():
+    global _init_done
+    if _init_done:
+        return
+    with _init_lock:
+        if _init_done:
+            return
+        # whatever you previously had in the decorator:
+        ensure_admin_from_env()
+        enforce_admin_presence()
+        _init_done = True
+
+# run once per worker process when Gunicorn imports the app
+with app.app_context():
+    init_app_once()
+
 def _b64set(name: str, raw: bytes) -> None:
     os.environ[name] = base64.b64encode(raw).decode("utf-8")
 
@@ -2136,9 +2156,7 @@ def start_background_jobs_once() -> None:
     else:
         logger.info("Background jobs skipped in PID %s (another worker owns the lock)", os.getpid())
         
-@app.before_first_request
-def _boot_bg_jobs():
-    start_background_jobs_once()
+
 
 @app.get('/healthz')
 def healthz():
