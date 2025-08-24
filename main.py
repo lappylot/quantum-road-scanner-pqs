@@ -3589,7 +3589,6 @@ def login():
         form=form,
         error_message=error_message)
 
-
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     global registration_enabled
@@ -3601,7 +3600,6 @@ def register():
         invite_code = form.invite_code.data if not registration_enabled else None
 
         success, message = register_user(username, password, invite_code)
-
         if success:
             flash(message, "success")
             return redirect(url_for('login'))
@@ -3616,7 +3614,6 @@ def register():
     <title>Register - QRS</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 
-    <!-- SRIs kept EXACTLY the same -->
     <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
           integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
     <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
@@ -3632,11 +3629,9 @@ def register():
             color: #ffffff;
             font-family: 'Roboto', sans-serif;
         }
-        /* Transparent navbar like Home */
         .navbar { background-color: transparent !important; }
         .navbar .nav-link { color: #fff; }
         .navbar .nav-link:hover { color: #66ff66; }
-
         .container { max-width: 400px; margin-top: 100px; }
         .walkd { padding: 30px; background-color: rgba(255, 255, 255, 0.1); border: none; border-radius: 15px; }
         .error-message { color: #ff4d4d; }
@@ -3671,7 +3666,7 @@ def register():
     </style>
 </head>
 <body>
-    <!-- Navbar: ONLY Login / Register (no Dashboard, no dropdown) -->
+    <!-- Navbar with Login / Register -->
     <nav class="navbar navbar-expand-lg navbar-dark">
         <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
         <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav"
@@ -3689,7 +3684,7 @@ def register():
 
     <div class="container">
         <div class="walkd shadow">
-            <div class="brand">CS</div>
+            <div class="brand">QRS</div>
             <h3 class="text-center">Register</h3>
             {% if error_message %}
             <p class="error-message text-center">{{ error_message }}</p>
@@ -3717,7 +3712,6 @@ def register():
         </div>
     </div>
 
-    <!-- Tiny vanilla JS to make the navbar collapse work without extra JS files -->
     <script>
     document.addEventListener('DOMContentLoaded', function () {
         var toggler = document.querySelector('.navbar-toggler');
@@ -3732,10 +3726,8 @@ def register():
     </script>
 </body>
 </html>
-    """,
-        form=form,
-        error_message=error_message,
-        registration_enabled=registration_enabled)
+    """, form=form, error_message=error_message, registration_enabled=registration_enabled)
+
 
 
 @app.route('/settings', methods=['GET', 'POST'])
