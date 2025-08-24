@@ -2146,7 +2146,6 @@ def fetch_entropy_logs():
 
 _BG_LOCK_PATH = os.getenv("QRS_BG_LOCK_PATH", "/tmp/qrs_bg.lock")
 _BG_LOCK_HANDLE = None  # keep process-lifetime handle
-
 def start_background_jobs_once() -> None:
     global _BG_LOCK_HANDLE
     if getattr(app, "_bg_started", False):
@@ -2165,14 +2164,19 @@ def start_background_jobs_once() -> None:
         ok_to_start = False  # another proc owns it
 
     if ok_to_start:
-        threading.Thread(target=rotate_secret_key, daemon=True).start()
+        # Only rotate the Flask session key if explicitly enabled
+        if os.getenv("QRS_ROTATE_SESSION_KEY", "0") == "1":
+            threading.Thread(target=rotate_secret_key, daemon=True).start()
+            logger.info("Session key rotation thread started (QRS_ROTATE_SESSION_KEY=1).")
+        else:
+            logger.info("Session key rotation disabled (QRS_ROTATE_SESSION_KEY!=1).")
+
         threading.Thread(target=delete_expired_data, daemon=True).start()
         app._bg_started = True
         logger.info("Background jobs started in PID %s", os.getpid())
     else:
         logger.info("Background jobs skipped in PID %s (another proc owns the lock)", os.getpid())
-
-
+      
 @app.get('/healthz')
 def healthz():
     return "ok", 200
