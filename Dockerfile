@@ -52,4 +52,6 @@ USER appuser
 EXPOSE 3000
 
 # Start Flask via waitress
-CMD ["waitress-serve", "--host=0.0.0.0", "--port=3000", "--threads=4", "main:app"]
+
+# Run Gunicorn
+CMD ["gunicorn", "quantum-road-scanner:app", "-b", "0.0.0.0:3000", "-w", "4", "-k", "gthread", "--threads", "2", "--timeout", "180", "--graceful-timeout", "30", "--log-level", "info"]
