@@ -2662,15 +2662,24 @@ def api_stream():
     def gen():
         for _ in range(24):
             sig = _system_signals(uid)
-            data = _fallback_score(sig)  # or your LLM call if desired
-            yield f"data: {json.dumps(data)}\n\n"
+            prompt = _build_guess_prompt(uid, sig)
+            data = _call_llm(prompt)  # ❌ no local fallback
+
+            meta = {"ts": datetime.utcnow().isoformat() + "Z", "mode": "guess", "sig": sig}
+            if not data:
+                payload = {"error": "llm_unavailable", "server_enriched": meta}
+            else:
+                data["server_enriched"] = meta
+                payload = data
+
+            yield f"data: {json.dumps(payload, separators=(',',':'))}\n\n"
             time.sleep(3.2)
 
     resp = Response(gen(), mimetype="text/event-stream")
     resp.headers["Cache-Control"] = "no-cache"
     resp.headers["X-Accel-Buffering"] = "no"   # avoids buffering on some proxies
     return _attach_cookie(resp)
-
+    
 def _safe_get(d: Dict[str, Any], keys: List[str], default: str = "") -> str:
     for k in keys:
         v = d.get(k)
