@@ -551,7 +551,11 @@ def apply_csp(response):
                   "base-uri 'self'; ")
     response.headers['Content-Security-Policy'] = csp_policy
     return response
-
+_JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.I | re.M)
+def _sanitize(s: str) -> str:
+    if not isinstance(s, str):
+        return ""
+    return _JSON_FENCE.sub("", s).strip()
 class KeyManager:
     encryption_key: Optional[bytes]
     passphrase_env_var: str
@@ -1850,11 +1854,6 @@ try:
 except NameError:
     quantum_hazard_scan = None  # fallback when module not present
 
-
-
-# Single flag the rest of the code can trust
-_QML_OK = (np is not None) and callable(quantum_hazard_scan)
-
 def create_tables():
     if not DB_FILE.exists():
         DB_FILE.touch(mode=0o600)
@@ -2434,17 +2433,24 @@ def _safe_json_parse(txt: str):
             return None
     return None
 
-# ---------- quantum features + {quantum_state} string ----------
+_QML_OK = False  # set a safe default; we’ll probe at runtime
+
+def _qml_ready() -> bool:
+    try:
+        return (np is not None) and ('quantum_hazard_scan' in globals()) and callable(quantum_hazard_scan)
+    except Exception:
+        return False
+
 def _quantum_features(cpu: float, ram: float):
     """
     Returns:
       qs_dict: compact dict with entropy, peak state, etc.
       qs_str : short string for prompt: {quantum_state}
     """
-    if not _QML_OK:
+    if not _qml_ready():
         return None, "unavailable"
     try:
-        probs = np.asarray(quantum_hazard_scan(cpu, ram), dtype=float)  # len=32
+        probs = np.asarray(quantum_hazard_scan(cpu, ram), dtype=float)  # le
         # Shannon entropy (bits)
         H = float(-(probs * np.log2(np.clip(probs, 1e-12, 1))).sum())
         idx = int(np.argmax(probs))
