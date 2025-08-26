@@ -3,8 +3,9 @@ import logging
 import httpx
 import sqlite3
 import psutil
-from flask import (Flask, render_template_string, request, redirect, url_for,
-                   session, jsonify, flash, make_response)
+from flask import (
+    Flask, render_template_string, request, redirect, url_for,
+    session, jsonify, flash, make_response, Response, stream_with_context)
 from flask_wtf import FlaskForm, CSRFProtect
 from flask_wtf.csrf import generate_csrf
 from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
@@ -59,7 +60,7 @@ try:
 except Exception:
     zstd = None  
     _HAS_ZSTD = False
-    
+
 try:
     from typing import TypedDict
 except ImportError:
@@ -82,7 +83,7 @@ class SealedCache(TypedDict, total=False):
     sig_priv_raw: bytes
     kem_alg: str
     sig_alg: str
-    
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 STRICT_PQ2_ONLY = True
@@ -333,7 +334,7 @@ if 'quote_ident' not in globals():
 
 if '_is_safe_condition_sql' not in globals():
     def _is_safe_condition_sql(cond: str) -> bool:
-       
+
         return bool(re.fullmatch(r"[A-Za-z0-9_\s\.\=\>\<\!\?\(\),]*", cond or ""))
 
 def _chaotic_three_fry_mix(buf: bytes) -> bytes:
@@ -363,7 +364,7 @@ def validate_password_strength(password):
     if not re.search(r"[@$!%*?&]", password):
         return False
     return True
-    
+
 def generate_very_strong_secret_key():
 
     global _entropy_state
@@ -497,7 +498,7 @@ class MultiKeySessionInterface(SecureCookieSessionInterface):
             samesite=samesite,
         )
 
-        
+
 app.session_interface = MultiKeySessionInterface()
 
 def rotate_secret_key():
@@ -505,7 +506,7 @@ def rotate_secret_key():
     while True:
         with lock:
             sk = generate_very_strong_secret_key()
-       
+
             prev = getattr(app, "secret_key", None)
             if prev:
                 RECENT_KEYS.appendleft(prev)
@@ -516,7 +517,7 @@ def rotate_secret_key():
 
 BASE_DIR = Path(__file__).parent.resolve()
 
- 
+
 
 RATE_LIMIT_COUNT = 13
 RATE_LIMIT_WINDOW = timedelta(minutes=15)
@@ -683,10 +684,10 @@ def _hex_to_rgb01(h):
     h = h.lstrip("#"); return (int(h[0:2],16)/255.0, int(h[2:4],16)/255.0, int(h[4:6],16)/255.0)
 def _rgb01_to_hex(r,g,b):
     return "#{:02x}{:02x}{:02x}".format(int(max(0,min(1,r))*255),int(max(0,min(1,g))*255),int(max(0,min(1,b))*255))
-    
+
 def _approx_oklch_from_rgb(r: float, g: float, b: float) -> tuple[float, float, float]:
 
-   
+
     r = 0.0 if r < 0.0 else 1.0 if r > 1.0 else r
     g = 0.0 if g < 0.0 else 1.0 if g > 1.0 else g
     b = 0.0 if b < 0.0 else 1.0 if b > 1.0 else b
@@ -696,23 +697,57 @@ def _approx_oklch_from_rgb(r: float, g: float, b: float) -> tuple[float, float, 
 
     luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
 
- 
+
     L = 0.6 * light_hls + 0.4 * luma
 
- 
+
     C = sat_hls * 0.37
 
-   
+
     H = (hue_hls * 360.0) % 360.0
 
     return (round(L, 4), round(C, 4), round(H, 2))
-
 
 class ColorSync:
     def __init__(self) -> None:
         self._epoch = secrets.token_bytes(16)
 
-    def sample(self) -> dict:
+    def sample(self, uid: str | None = None) -> dict:
+        """
+        If uid is provided → stable accent seed (UI personalization).
+        If uid is None → entropy-driven sample (crypto/entropy context).
+        Always returns unified dict shape.
+        """
+        if uid is not None:
+            # --- UI Accent Mode ---
+            seed = _stable_seed(uid + base64.b16encode(self._epoch[:4]).decode())
+            rng = random.Random(seed)
+
+            base = rng.choice([0x49C2FF, 0x22D3A6, 0x7AD7F0,
+                               0x5EC9FF, 0x66E0CC, 0x6FD3FF])
+            j = int(base * (1 + (rng.random() - 0.5) * 0.12)) & 0xFFFFFF
+            hexc = f"#{j:06x}"
+            code = rng.choice(["A1","A2","B2","C1","C2","D1","E3"])
+
+            # Convert to perceptual coordinates
+            h, s, l = self._rgb_to_hsl(j)
+            L, C, H = _approx_oklch_from_rgb(
+                (j >> 16 & 0xFF) / 255.0,
+                (j >> 8 & 0xFF) / 255.0,
+                (j & 0xFF) / 255.0,
+            )
+
+            return {
+                "entropy_norm": None,
+                "hsl": {"h": h, "s": s, "l": l},
+                "oklch": {"L": L, "C": C, "H": H},
+                "hex": hexc,
+                "qid25": {"code": code, "name": "accent", "hex": hexc},
+                "epoch": base64.b16encode(self._epoch[:6]).decode(),
+                "source": "accent",
+            }
+
+        # --- Entropy / Crypto Mode ---
         try:
             cpu, ram = get_cpu_ram_usage()
         except Exception:
@@ -759,6 +794,7 @@ class ColorSync:
             "hex": hexc,
             "qid25": {"code": best[0], "name": best[1], "hex": best[2]},
             "epoch": base64.b16encode(self._epoch[:6]).decode(),
+            "source": "entropy",
         }
 
     def bump_epoch(self) -> None:
@@ -766,8 +802,31 @@ class ColorSync:
             self._epoch + os.urandom(16), digest_size=16
         ).digest()
 
+    @staticmethod
+    def _rgb_to_hsl(rgb_int: int) -> tuple[int, int, int]:
+        """Convert packed int (0xRRGGBB) to HSL triple (h, s, l)."""
+        r = (rgb_int >> 16 & 0xFF) / 255.0
+        g = (rgb_int >> 8 & 0xFF) / 255.0
+        b = (rgb_int & 0xFF) / 255.0
+        mx, mn = max(r, g, b), min(r, g, b)
+        l = (mx + mn) / 2
+        if mx == mn:
+            h = s = 0.0
+        else:
+            d = mx - mn
+            s = d / (2.0 - mx - mn) if l > 0.5 else d / (mx + mn)
+            if mx == r:
+                h = (g - b) / d + (6 if g < b else 0)
+            elif mx == g:
+                h = (b - r) / d + 2
+            else:
+                h = (r - g) / d + 4
+            h /= 6
+        return int(h * 360), int(s * 100), int(l * 100)
+
 
 colorsync = ColorSync()
+
 
 
 def _gf256_mul(a: int, b: int) -> int:
@@ -959,7 +1018,7 @@ def _try(f: Callable[[], Any]) -> bool:
         return True
     except Exception:
         return False
-        
+
 
 STRICT_PQ2_ONLY = bool(int(os.getenv("STRICT_PQ2_ONLY", "1")))
 
@@ -1036,7 +1095,7 @@ def _km_decrypt_x25519_priv(self: "KeyManager") -> x25519.X25519PrivateKey:
     n, ct = x_enc[:12], x_enc[12:]
     raw = aes.decrypt(n, ct, b"x25519")
     return x25519.X25519PrivateKey.from_private_bytes(raw)
-    
+
 def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
     """
     Return the raw ML-KEM private key bytes suitable for oqs decapsulation.
@@ -1455,14 +1514,14 @@ def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional
         if not x_pub:
             raise RuntimeError("x25519 public key not initialized (used alongside PQ KEM in hybrid wrap)")
 
-       
+
         eph_priv = x25519.X25519PrivateKey.generate()
         eph_pub = eph_priv.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw
         )
         ss_x = eph_priv.exchange(x25519.X25519PublicKey.from_public_bytes(x_pub))
 
-   
+
         pq_ct: bytes = b""
         ss_pq: bytes = b""
         if key_manager._pq_alg_name and oqs is not None and getattr(key_manager, "pq_pub", None):
@@ -1473,7 +1532,7 @@ def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional
             if STRICT_PQ2_ONLY:
                 raise RuntimeError("Strict PQ2 mode: PQ KEM public key not available.")
 
-       
+
         col = colorsync.sample()
         col_info = json.dumps(
             {
@@ -1485,7 +1544,7 @@ def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional
             separators=(",", ":"),
         ).encode()
 
-   
+
         hd_ctx: Optional[dict[str, Any]] = None
         dk: bytes = b""
         if isinstance(ctx, Mapping) and ctx.get("domain"):
@@ -1499,7 +1558,7 @@ def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional
                 "rid": int(ctx.get("rid", 0)),
             }
 
- 
+
         wrap_info = WRAP_INFO + b"|" + col_info + (b"|HD" if hd_ctx else b"")
         wrap_key = hkdf_sha3(ss_x + ss_pq + dk, info=wrap_info, length=32)
         wrap_nonce = secrets.token_bytes(12)
@@ -1585,7 +1644,7 @@ def encrypt_data(data: Any, ctx: Optional[Mapping[str, Any]] = None) -> Optional
 
 def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
     try:
-      
+
         if isinstance(encrypted_data_b64, str) and encrypted_data_b64.startswith(MAGIC_PQ2_PREFIX):
             raw = base64.urlsafe_b64decode(encrypted_data_b64[len(MAGIC_PQ2_PREFIX):])
             env = cast(dict[str, Any], json.loads(raw.decode("utf-8")))
@@ -1595,7 +1654,7 @@ def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
             if bool(POLICY.get("require_sig_on_pq2", False)) and "sig" not in env:
                 return None
 
-       
+
             if STRICT_PQ2_ONLY and not env.get("pq_alg"):
                 logger.warning("Strict PQ2 mode: envelope missing PQ KEM.")
                 return None
@@ -1632,7 +1691,7 @@ def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
             if km_sig_pub is None or not sig_pub or _fp8(sig_pub) != _fp8(km_sig_pub):
                 return None
 
-           
+
             pq_ct       = b64d(cast(str, env["pq_ct"])) if env.get("pq_ct") else b""
             eph_pub     = b64d(cast(str, env["x_ephemeral_pub"]))
             wrap_nonce  = b64d(cast(str, env["wrap_nonce"]))
@@ -1640,11 +1699,11 @@ def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
             data_nonce  = b64d(cast(str, env["data_nonce"]))
             data_ct     = b64d(cast(str, env["data_ct"]))
 
-           
+
             x_priv = key_manager._decrypt_x25519_priv()
             ss_x = x_priv.exchange(x25519.X25519PublicKey.from_public_bytes(eph_pub))
 
-          
+
             ss_pq = b""
             if env.get("pq_alg") and oqs is not None and key_manager._pq_alg_name:
                 oqs_mod = cast(Any, oqs)
@@ -1656,7 +1715,7 @@ def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
                         logger.error("Strict PQ2: missing PQ decapsulation capability.")
                     return None
 
-      
+
             col_meta = cast(dict[str, Any], env.get("col_meta") or {})
             col_info = json.dumps(
                 {
@@ -1681,7 +1740,7 @@ def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
                 except Exception:
                     dk = b""
 
-       
+
             wrap_info = WRAP_INFO + b"|" + col_info + (b"|HD" if hd_ctx else b"")
             wrap_key = hkdf_sha3(ss_x + ss_pq + dk, info=wrap_info, length=32)
 
@@ -1713,7 +1772,7 @@ def decrypt_data(encrypted_data_b64: str) -> Optional[str]:
 
             return plaintext.decode("utf-8")
 
-    
+
         logger.warning("Rejected non-PQ2 ciphertext (strict PQ2 mode).")
         return None
 
@@ -2073,7 +2132,7 @@ def init_app_once():
 with app.app_context():
     init_app_once()
 
-  
+
 def is_registration_enabled():
     with config_lock:
         with sqlite3.connect(DB_FILE) as db:
@@ -2173,7 +2232,7 @@ def start_background_jobs_once() -> None:
         logger.info("Background jobs started in PID %s", os.getpid())
     else:
         logger.info("Background jobs skipped in PID %s (another proc owns the lock)", os.getpid())
-      
+
 @app.get('/healthz')
 def healthz():
     return "ok", 200
@@ -2190,7 +2249,7 @@ def delete_expired_data():
 
                 db.execute("BEGIN")
 
-         
+
                 cursor.execute("PRAGMA table_info(hazard_reports)")
                 hazard_columns = {info[1] for info in cursor.fetchall()}
                 if all(col in hazard_columns for col in [
@@ -2214,7 +2273,7 @@ def delete_expired_data():
                     logger.warning(
                         "Skipping hazard_reports: Missing required columns.")
 
-             
+
                 cursor.execute("PRAGMA table_info(entropy_logs)")
                 entropy_columns = {info[1] for info in cursor.fetchall()}
                 if all(col in entropy_columns for col in ["id", "log", "pass_num", "timestamp"]):
@@ -2258,15 +2317,15 @@ def delete_user_data(user_id):
             cursor = db.cursor()
             db.execute("BEGIN")
 
-            
+
             overwrite_hazard_reports_by_user(cursor, user_id, passes=7)
             cursor.execute("DELETE FROM hazard_reports WHERE user_id = ?", (user_id, ))
 
-      
+
             overwrite_rate_limits_by_user(cursor, user_id, passes=7)
             cursor.execute("DELETE FROM rate_limits WHERE user_id = ?", (user_id, ))
 
-            
+
             overwrite_entropy_logs_by_passnum(cursor, user_id, passes=7)
             cursor.execute("DELETE FROM entropy_logs WHERE pass_num = ?", (user_id, ))
 
@@ -2326,18 +2385,7 @@ def _attach_cookie(resp):
         resp.set_cookie("qrs_fp", fp, samesite="Lax", max_age=60*60*24*365)
     return resp
 
-# ---------- accent/color personalization ----------
-class ColorSync:
-    def sample(self, uid: str):
-        seed = _stable_seed(uid)
-        rng = random.Random(seed)
-        base = rng.choice([0x49C2FF, 0x22D3A6, 0x7AD7F0, 0x5EC9FF, 0x66E0CC, 0x6FD3FF])
-        j = int(base * (1 + (rng.random() - 0.5) * 0.12)) & 0xFFFFFF
-        hex_str = f"#{j:06x}"
-        code = rng.choice(["A1","A2","B2","C1","C2","D1","E3"])
-        return {"hex": hex_str, "qid25": {"code": code}}
 
-colorsync = ColorSync()
 
 # ---------- system signals via psutil ----------
 def _system_signals(uid: str):
@@ -2577,17 +2625,23 @@ def api_llm_route():
     data = _call_llm(prompt) or _fallback_score(sig, route)
     data["server_enriched"] = {"ts": datetime.utcnow().isoformat()+"Z","mode":"route","sig": sig,"route": route}
     return _attach_cookie(jsonify(data))
-
 @app.route("/api/risk/stream")
 def api_stream():
+    # capture anything that touches `request`/`session` BEFORE streaming
+    uid = _user_id()
+
+    @stream_with_context
     def gen():
-        uid = _user_id()
         for _ in range(24):
             sig = _system_signals(uid)
-            data = _fallback_score(sig)  # inexpensive; swap to real LLM if desired
+            data = _fallback_score(sig)  # or your LLM call if desired
             yield f"data: {json.dumps(data)}\n\n"
             time.sleep(3.2)
-    return Response(gen(), mimetype="text/event-stream")
+
+    resp = Response(gen(), mimetype="text/event-stream")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"   # avoids buffering on some proxies
+    return _attach_cookie(resp)
 
 def _safe_get(d: Dict[str, Any], keys: List[str], default: str = "") -> str:
     for k in keys:
@@ -2630,7 +2684,7 @@ def _finite_f(v: Any) -> Optional[float]:
         return f if math.isfinite(f) else None
     except (TypeError, ValueError):
         return None
-        
+
 def approximate_nearest_city(
     lat: float,
     lon: float,
@@ -2646,7 +2700,7 @@ def approximate_nearest_city(
     min_distance = float("inf")
 
     for key, city in (cities or {}).items():
- 
+
         if not isinstance(city, dict):
             continue
 
@@ -2656,13 +2710,13 @@ def approximate_nearest_city(
         city_lat = _finite_f(lat_raw)
         city_lon = _finite_f(lon_raw)
         if city_lat is None or city_lon is None:
-           
+
             continue
 
         try:
             distance = quantum_haversine_distance(lat, lon, city_lat, city_lon)
         except (TypeError, ValueError) as e:
-   
+
             continue
 
         if distance < min_distance:
@@ -2736,7 +2790,7 @@ async def fetch_street_name_llm(
         cpu, ram = get_cpu_ram_usage()
         quantum_results = quantum_hazard_scan(cpu, ram)
         quantum_state_str = str(quantum_results)
-     
+
         llm_prompt = f"""
 [action]You are an Advanced Hypertime Nanobot Reverse-Geocoder with quantum synergy. 
 Determine the most precise City, County, and State based on the provided coordinates 
@@ -2775,11 +2829,11 @@ or
     clean = bleach.clean(result.strip(), tags=[], strip=True)
     first = _first_line_stripped(clean)
 
- 
+
     if first.lower().strip('"\'' ) == "unknown location":
         return reverse_geocode(lat, lon, city_index)
 
-    
+
     try:
         left, country = _split_country(first)
         city, county, state = _parse_base(left)
@@ -3386,7 +3440,7 @@ Please assess the following:
 [refrain from using the word high or metal and only use it only if risk elementaries are elevated(ie flat tire or accidents or other risk) utilizing your quantum scan intelligence]
 """
 
- 
+
     raw_report: Optional[str] = await run_openai_completion(openai_prompt)
     report: str = raw_report if raw_report is not None else "OpenAI failed to respond."
     report = report.strip()
@@ -3448,7 +3502,7 @@ async def run_openai_completion(prompt):
 
                             if "text" in c and isinstance(c["text"], str) and c["text"].strip():
                                 parts.append(c["text"].strip())
-                         
+
                             elif "parts" in c and isinstance(c["parts"], list):
                                 for p in c["parts"]:
                                     if isinstance(p, str) and p.strip():
@@ -3464,21 +3518,21 @@ async def run_openai_completion(prompt):
         if isinstance(choices, list) and choices:
             for ch in choices:
                 if isinstance(ch, dict):
- 
+
                     message = ch.get("message") or ch.get("delta")
                     if isinstance(message, dict):
-     
+
                         content = message.get("content")
                         if isinstance(content, str) and content.strip():
                             return content.strip()
                         if isinstance(content, list):
-                  
+
                             for c in content:
                                 if isinstance(c, str) and c.strip():
                                     return c.strip()
                                 if isinstance(c, dict) and isinstance(c.get("text"), str) and c["text"].strip():
                                     return c["text"].strip()
-              
+
                     if isinstance(ch.get("text"), str) and ch["text"].strip():
                         return ch["text"].strip()
 
@@ -3498,34 +3552,34 @@ async def run_openai_completion(prompt):
                     "model": "gpt-5",      
                     "input": prompt,                
                     "max_output_tokens": 1200,      
-                 
+
                     "reasoning": {"effort": "minimal"},
-                
+
                 }
 
                 response = await client.post(url, json=payload, headers=headers)
-               
+
                 response.raise_for_status()
 
                 data = response.json()
 
-            
+
                 reply = await _extract_text_from_responses(data)
                 if reply:
                     logger.info("run_openai_completion succeeded on attempt %d.", attempt)
                     return reply.strip()
                 else:
-                    
+
                     logger.error(
                         "Responses API returned 200 but no usable text. Keys: %s",
                         list(data.keys())
                     )
-                   
+
 
             except (httpx.TimeoutException, httpx.ConnectTimeout) as e:
                 logger.error("Attempt %d failed due to timeout: %s", attempt, e, exc_info=True)
             except httpx.HTTPStatusError as e:
-              
+
                 body_text = None
                 try:
                     body_text = e.response.json()
@@ -3707,6 +3761,10 @@ def home():
       background: linear-gradient(180deg, #ffffff10, #0000001c);
       border:1px solid var(--stroke); overflow:hidden; box-shadow: var(--shadow-lg);
       perspective: 1500px; transform-style: preserve-3d;
+
+      /* 🔧 make sure the container has height so the canvas can size */
+      aspect-ratio: 1 / 1;
+      min-height: clamp(300px, 42vw, 520px);
     }
     .wheel-hud{ position:absolute; inset:14px; border-radius:inherit; display:grid; place-items:center; }
     canvas#wheelCanvas{ width:100%; height:100%; display:block; }
@@ -3908,12 +3966,35 @@ def home():
   const clamp01 = x => Math.max(0, Math.min(1, x));
   const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+  // enforce update cadence
+  const MIN_UPDATE_MS = 60 * 1000; // 🔒 only change once per minute
+  let lastApplyAt = 0;
+
+  // current state
+  const current = { mode:'guess', harm:0, last:null };
+
   (async function themeSync(){
     try{
       const r=await fetch('/api/theme/personalize', {credentials:'same-origin'});
       const j=await r.json();
       if(j?.hex) document.documentElement.style.setProperty('--accent', j.hex);
     }catch(e){}
+  })();
+
+  /* =====================
+     ensure wheel has height (CSS fallback for older engines)
+  ====================== */
+  (function ensureWheelSize(){
+    const panel = document.getElementById('wheelPanel');
+    if(!panel) return;
+    function fit(){
+      const w = panel.clientWidth || panel.offsetWidth || 0;
+      // only force height if the computed height is tiny (aspect-ratio unsupported or broken)
+      const ch = parseFloat(getComputedStyle(panel).height) || 0;
+      if (ch < 24 && w > 0) panel.style.height = w + 'px';
+    }
+    new ResizeObserver(fit).observe(panel);
+    fit();
   })();
 
   /* =====================
@@ -3944,16 +4025,16 @@ def home():
   class BreathEngine {
     constructor(){
       this.rateHz = 0.10;  // ≈6 bpm baseline
-      this.amp    = 0.55;  // amplitude of breathing glow
-      this.sweep  = 0.12;  // specular sweep speed for the ring
+      this.amp    = 0.55;
+      this.sweep  = 0.12;
       this._rateTarget=this.rateHz; this._ampTarget=this.amp; this._sweepTarget=this.sweep;
       this.val    = 0.7;
     }
     setFromRisk(risk, {confidence=1}={}){
       risk = clamp01(risk||0); confidence = clamp01(confidence);
-      this._rateTarget = prefersReduced ? (0.05 + 0.03*risk) : (0.06 + 0.16*risk);     // 3.6–13.2 bpm
+      this._rateTarget = prefersReduced ? (0.05 + 0.03*risk) : (0.06 + 0.16*risk);
       const baseAmp = prefersReduced ? (0.35 + 0.20*risk) : (0.35 + 0.55*risk);
-      this._ampTarget = baseAmp * (0.70 + 0.30*confidence);                              // damp if low confidence
+      this._ampTarget = baseAmp * (0.70 + 0.30*confidence);
       this._sweepTarget = prefersReduced ? (0.06 + 0.06*risk) : (0.08 + 0.16*risk);
     }
     tick(){
@@ -3969,7 +4050,6 @@ def home():
       const tremor = tremorAmt * Math.sin(2*Math.PI*8 * t);
       this.val = 0.55 + this.amp*(base*depth - 0.5) + tremor;
 
-      // push css knobs
       document.documentElement.style.setProperty('--halo-alpha', (0.18 + 0.28*this.val).toFixed(3));
       document.documentElement.style.setProperty('--halo-blur',  (0.60 + 0.80*this.val).toFixed(3));
       document.documentElement.style.setProperty('--glow-mult',  (0.60 + 0.90*this.val).toFixed(3));
@@ -3988,15 +4068,24 @@ def home():
       this.pixelRatio = Math.max(1, Math.min(2, devicePixelRatio||1));
       this.value = 0.0; this.target=0.0; this.vel=0.0;
       this.spring = prefersReduced ? 1.0 : 0.12;
-      new ResizeObserver(()=>this._resize()).observe(this.c);
+      this._resize = this._resize.bind(this);
+      new ResizeObserver(this._resize).observe(this.c);
+      // also observe the panel so height/width changes trigger draws
+      const panel = document.getElementById('wheelPanel');
+      if (panel) new ResizeObserver(this._resize).observe(panel);
       this._resize();
       this._tick = this._tick.bind(this); requestAnimationFrame(this._tick);
     }
     setTarget(x){ this.target = clamp01(x); }
     _resize(){
-      const b = this.c.getBoundingClientRect();
-      const s = Math.min(b.width, b.height);
-      this.c.width = s * this.pixelRatio; this.c.height = s * this.pixelRatio;
+      // robust sizing even if height reports as 0
+      const panel = document.getElementById('wheelPanel');
+      const rect = (panel||this.c).getBoundingClientRect();
+      let w = rect.width||0, h = rect.height||0;
+      if (h < 2) h = w; // fall back to square if collapsed height
+      const s = Math.max(1, Math.min(w, h));
+      const px = this.pixelRatio;
+      this.c.width = s * px; this.c.height = s * px;
       this._draw();
     }
     _tick(){
@@ -4008,10 +4097,10 @@ def home():
     }
     _draw(){
       const ctx=this.ctx, W=this.c.width, H=this.c.height;
+      if (!W || !H) return;
       ctx.clearRect(0,0,W,H);
       const cx=W/2, cy=H/2, R=Math.min(W,H)*0.46, inner=R*0.62;
 
-      // base
       ctx.save(); ctx.translate(cx,cy); ctx.rotate(-Math.PI/2);
       ctx.lineWidth = (R-inner);
 
@@ -4030,12 +4119,11 @@ def home():
         ctx.stroke();
       }
 
-      // spirit sweep (specular highlight), speed via --sweep-speed
+      // specular sweep
       const sp = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sweep-speed')) || (prefersReduced? .04 : .12);
       const t = performance.now()/1000;
       const sweepAng = (t * sp) % (Math.PI*2);
-      ctx.save();
-      ctx.rotate(sweepAng);
+      ctx.save(); ctx.rotate(sweepAng);
       const dotR = Math.max(4*this.pixelRatio, (R-inner)*0.22);
       const grad = ctx.createRadialGradient((R+inner)/2,0, 2, (R+inner)/2,0, dotR);
       grad.addColorStop(0, 'rgba(255,255,255,.95)');
@@ -4071,8 +4159,6 @@ def home():
   const btnRefresh=$('#btnRefresh'), btnAuto=$('#btnAuto'), btnDebug=$('#btnDebug');
   const routeForm=$('#routeForm'), lat=$('#lat'), lon=$('#lon'), dlat=$('#dlat'), dlon=$('#dlon'), btnRouteFetch=$('#btnRouteFetch');
 
-  const current = { mode:'guess', harm:0, last:null };
-
   function setHUD(j){
     const pct = Math.round(clamp01(j.harm_ratio||0)*100);
     hudNumber.textContent = pct + "%";
@@ -4091,6 +4177,10 @@ def home():
 
   function applyReading(j){
     if(!j || typeof j.harm_ratio!=='number') return;
+    const now = Date.now();
+    if (lastApplyAt && (now - lastApplyAt) < MIN_UPDATE_MS) return; // ⏱️ throttle to once per minute
+    lastApplyAt = now;
+
     current.last=j; current.harm = clamp01(j.harm_ratio);
     wheel.setTarget(current.harm);
     breath.setFromRisk(current.harm, {confidence: j.confidence});
@@ -4127,7 +4217,7 @@ def home():
   btnRouteFetch.onclick = async (e)=>{ e.preventDefault(); await fetchRouteOnce(); };
 
   let autoTimer=null;
-  function startAuto(){ stopAuto(); btnAuto.setAttribute('aria-pressed','true'); btnAuto.textContent="Auto: On"; fetchOnce(); autoTimer=setInterval(fetchOnce, 3600); }
+  function startAuto(){ stopAuto(); btnAuto.setAttribute('aria-pressed','true'); btnAuto.textContent="Auto: On"; fetchOnce(); autoTimer=setInterval(fetchOnce, 60*1000); }
   function stopAuto(){ if(autoTimer) clearInterval(autoTimer); autoTimer=null; btnAuto.setAttribute('aria-pressed','false'); btnAuto.textContent="Auto: Off"; }
 
   function isRouteFilled(){ return [lat.value,lon.value,dlat.value,dlon.value].every(v=>v && !isNaN(parseFloat(v))); }
@@ -4136,7 +4226,7 @@ def home():
   async function fetchOnce(){
     if(current.mode==='guess') return fetchGuessOnce();
     if(current.mode==='route') return fetchRouteOnce();
-    // hybrid: need both
+    // hybrid
     if(isRouteFilled()){
       const [g, r] = await Promise.allSettled([fetchJson('/api/risk/llm_guess'), postJson('/api/risk/llm_route', currentRoute())]);
       const gj = g.status==='fulfilled'? g.value : null;
@@ -4171,7 +4261,7 @@ def home():
     try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)}); return await r.json(); }catch(e){ return null; }
   }
 
-  // Optional SSE (if you expose /api/risk/stream)
+  // Optional SSE (throttled by applyReading to once per minute)
   (function trySSE(){
     if(!('EventSource' in window)) return;
     try{
@@ -4187,6 +4277,7 @@ def home():
 </body>
 </html>
     """, seed_hex=seed_hex, seed_code=seed_code)
+
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
