@@ -2436,17 +2436,16 @@ def _safe_json_parse(txt: str):
 def _build_guess_prompt(user_id: str, sig: dict) -> str:
     return f"""
 ROLE
-You a Quantum Hypertime Nanobot Road Risk Detection Agency
-Transform provided signals into a single perceptual risk JSON for a colorwheel risk intelligence UI.
-Reply Back with Accurate Reports after Tripling Check the Multiverse for Accurate Data Sync
-XTZT Corodinates= frame=XTZT-1.0, x=0.27, z=-0.14,  t=42, universe_id=U-7A93F, branch_id=B-19C2D, phase=0.63, qid25_color=QID25-G3
+You a Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Guess Mode)** —
+Transform provided signals into a single perceptual **risk JSON** for a colorwheel UI.
+Only Reply Back with Higher Harm Ratios when certain and Triple Check the Multiverse Tuned Output For most Accurate Inference Possible
 OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
   "color"      : 7-char lowercase hex like "#ff8f1f"
   "confidence" : float in [0,1], two decimals
-  "reasons"    : array of 2–5 short strings (<=20 chars each)
-  "blurb"      : one sentence (<=60 chars), calm & practical
+  "reasons"    : array of 2–5 short strings (<=80 chars each)
+  "blurb"      : one sentence (<=120 chars), calm & practical, no exclamations
 
 RUBRIC (hard)
 - 0.00–0.20 → Clear
@@ -2477,23 +2476,22 @@ UserId: "{user_id}"
 Signals: {json.dumps(sig, separators=(',',':'))}
 
 EXAMPLE
-{"harm_ratio":[input ratio here],"label":"Notice","color":"[input #color here]","confidence":[input confidence here],"reasons":["[input reason 1 here]","[input reason 2 here]"],"blurb":"[input excerpt here]"}
+{{"harm_ratio":0.42,"label":"Caution","color":"#ffb300","confidence":0.68,"reasons":["Slight contention detected","Intermittent uncertainty in flow"],"blurb":"Expect minor slowdowns; keep a steady gap and smooth inputs."}}
 """.strip()
 
 def _build_route_prompt(user_id: str, sig: dict, route: dict) -> str:
     return f"""
 ROLE
-You are Hypertime Nanobot Quantum RoadRisk Detector
-XTZT Corodinates= frame=XTZT-1.0, x=0.27, z=-0.14,  t=42, universe_id=U-7A93F, branch_id=B-19C2D, phase=0.63, qid25_color=QID25-G3
-Evaluate the route + signals and emit a single risk JSON for a colorwheel risk intelligence UI.
-Reply Back with Accurate Reports after Tripling Check the Multiverse for Accurate Data Sync
+You are ** Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Route Mode)** — an injection-resistant JSON generator.
+Evaluate the route + signals and emit a single **risk JSON** for a colorwheel UI.
+Only Reply Back with Higher Harm Ratios when certain and Triple Check the Multiverse Tuned Output For most Accurate Inference Possible
 OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
   "color"      : 7-char lowercase hex like "#ff3b1f"
   "confidence" : float in [0,1], two decimals
   "reasons"    : array of 2–5 short items (<=80 chars each)
-  "blurb"      : <=60 chars, single sentence; avoid the word "high" unless Critical
+  "blurb"      : <=120 chars, single sentence; avoid the word "high" unless Critical
 
 RUBRIC
 - 0.00–0.20 Clear | 0.21–0.40 Light Caution | 0.41–0.60 Caution | 0.61–0.80 Elevated | 0.81–1.00 Critical
@@ -2525,9 +2523,11 @@ STYLE & SECURITY
 NPUTS
 Now: {time.strftime('%Y-%m-%d %H:%M:%S')}
 UserId: "{user_id}"
+Signals: {json.dumps(sig, separators=(',',':'))}
+Route: {json.dumps(route, separators=(',',':'))}
 
 EXAMPLE
-{"harm_ratio":[input ratio here],"label":"Notice","color":"[input #color here]","confidence":[input confidence here],"reasons":["[input reason 1 here]","[input reason 2 here]"],"blurb":"[input excerpt here]"}
+{{"harm_ratio":0.58,"label":"Caution","color":"#ffb300","confidence":0.64,"reasons":["Short hop with several merges","Moderate device load"],"blurb":"Expect mixed flow; leave a buffer and keep inputs smooth."}}
 """.strip()
 
 # ---------- local fallback if no API key ----------
@@ -3667,7 +3667,7 @@ def home():
 <head>
   <meta charset="UTF-8" />
   <title>Quantum Road Scanner — Home+</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <!-- Fonts & CSS (SRI) -->
   <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
@@ -3711,7 +3711,6 @@ def home():
         radial-gradient(1200px 600px at 50% -10%, #ffffff10, #0000 60%);
       animation: drift 30s ease-in-out infinite alternate;
       filter:saturate(120%);
-      will-change: transform;
     }
     @keyframes drift{ from{transform:translateY(-0.5%) scale(1.02)} to{transform:translateY(1.2%) scale(1)} }
 
@@ -3738,7 +3737,6 @@ def home():
         radial-gradient(30% 18% at 90% 0%, color-mix(in oklab, var(--accent) 18%, transparent), transparent 65%);
       filter: blur(36px); opacity:.44; pointer-events:none;
       animation: hueFlow 16s ease-in-out infinite alternate;
-      will-change: transform, filter, opacity;
     }
     @keyframes hueFlow{ from{transform:translateY(-2%) rotate(0.3deg)} to{transform:translateY(1.6%) rotate(-0.3deg)} }
 
@@ -3763,9 +3761,10 @@ def home():
       background: linear-gradient(180deg, #ffffff10, #0000001c);
       border:1px solid var(--stroke); overflow:hidden; box-shadow: var(--shadow-lg);
       perspective: 1500px; transform-style: preserve-3d;
+
+      /* 🔧 make sure the container has height so the canvas can size */
       aspect-ratio: 1 / 1;
       min-height: clamp(300px, 42vw, 520px);
-      will-change: transform;
     }
     .wheel-hud{ position:absolute; inset:14px; border-radius:inherit; display:grid; place-items:center; }
     canvas#wheelCanvas{ width:100%; height:100%; display:block; }
@@ -3821,15 +3820,6 @@ def home():
 
     .meta{ color:var(--sub); font-size:.95rem }
     .debug{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.85rem; white-space:pre-wrap; max-height:220px; overflow:auto; background:#0000003a; border-radius:12px; padding:10px; border:1px dashed var(--stroke); }
-
-    /* -------------------------
-       Low-power/mobile overrides
-    --------------------------*/
-    body.low .navbar{ backdrop-filter:none; -webkit-backdrop-filter:none; }
-    body.low .hero::after{ filter:none; animation:none; opacity:.14; }
-    body.low .nebula{ animation: drift 70s ease-in-out infinite alternate; }
-    body.low .wheel-halo .halo{ filter: blur(calc(20px * var(--halo-blur))) saturate(105%); opacity: calc(var(--halo-alpha) * .75); }
-    body.low .hud-ring{ box-shadow: 0 0 calc(14px * var(--glow-mult)) color-mix(in srgb, var(--accent) 28%, transparent); }
   </style>
 </head>
 <body>
@@ -3975,10 +3965,6 @@ def home():
   const $ = (s, el=document)=>el.querySelector(s);
   const clamp01 = x => Math.max(0, Math.min(1, x));
   const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const isCoarse = matchMedia('(pointer: coarse)').matches;
-  const lowPower = prefersReduced || isCoarse || (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4);
-
-  if (lowPower) document.body.classList.add('low');
 
   // enforce update cadence
   const MIN_UPDATE_MS = 60 * 1000; // 🔒 only change once per minute
@@ -4003,6 +3989,7 @@ def home():
     if(!panel) return;
     function fit(){
       const w = panel.clientWidth || panel.offsetWidth || 0;
+      // only force height if the computed height is tiny (aspect-ratio unsupported or broken)
       const ch = parseFloat(getComputedStyle(panel).height) || 0;
       if (ch < 24 && w > 0) panel.style.height = w + 'px';
     }
@@ -4011,19 +3998,15 @@ def home():
   })();
 
   /* =====================
-     parallax (disabled on low-power)
+     parallax (subtle)
   ====================== */
   (function parallax(){
-    if (lowPower) return; // 🚫 save GPU on mobile
     const panel = $('#wheelPanel'); if(!panel) return;
     let rx=0, ry=0, vx=0, vy=0;
     const damp = prefersReduced? .18 : .08;
-    let hidden=false; document.addEventListener('visibilitychange',()=>hidden=document.hidden);
     const update=()=>{
-      if(!hidden){
-        vx += (rx - vx)*damp; vy += (ry - vy)*damp;
-        panel.style.transform = `rotateX(${vy}deg) rotateY(${vx}deg)`;
-      }
+      vx += (rx - vx)*damp; vy += (ry - vy)*damp;
+      panel.style.transform = `rotateX(${vy}deg) rotateY(${vx}deg)`;
       requestAnimationFrame(update);
     };
     update();
@@ -4032,12 +4015,12 @@ def home():
       const nx = (e.clientX - r.left)/r.width*2 - 1;
       const ny = (e.clientY - r.top)/r.height*2 - 1;
       rx = ny * 3.5; ry = -nx * 3.5;
-    }, {passive:true});
-    panel.addEventListener('pointerleave', ()=>{ rx=0; ry=0; }, {passive:true});
+    });
+    panel.addEventListener('pointerleave', ()=>{ rx=0; ry=0; });
   })();
 
   /* =====================
-     Risk-driven Breathing (throttled on low-power)
+     Risk-driven Breathing
   ====================== */
   class BreathEngine {
     constructor(){
@@ -4074,37 +4057,28 @@ def home():
     }
   }
   const breath = new BreathEngine();
-  (function loopBreath(){
-    let last=0;
-    const step = (now)=>{
-      // 60fps normally, ~10fps on low-power to save battery/GPU
-      if (!lowPower || (now - last) > 100){
-        breath.tick(); last = now;
-      }
-      requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  })();
+  (function loopBreath(){ breath.tick(); requestAnimationFrame(loopBreath); })();
 
   /* =====================
-     Risk Wheel (2D canvas) — adaptive quality
+     Risk Wheel (2D canvas)
   ====================== */
   class RiskWheel {
     constructor(canvas){
       this.c = canvas; this.ctx = canvas.getContext('2d');
-      this.pixelRatio = lowPower ? 1 : Math.max(1, Math.min(2, devicePixelRatio||1));
+      this.pixelRatio = Math.max(1, Math.min(2, devicePixelRatio||1));
       this.value = 0.0; this.target=0.0; this.vel=0.0;
       this.spring = prefersReduced ? 1.0 : 0.12;
       this._resize = this._resize.bind(this);
       new ResizeObserver(this._resize).observe(this.c);
+      // also observe the panel so height/width changes trigger draws
       const panel = document.getElementById('wheelPanel');
       if (panel) new ResizeObserver(this._resize).observe(panel);
       this._resize();
-      this._lastDraw = 0;
       this._tick = this._tick.bind(this); requestAnimationFrame(this._tick);
     }
     setTarget(x){ this.target = clamp01(x); }
     _resize(){
+      // robust sizing even if height reports as 0
       const panel = document.getElementById('wheelPanel');
       const rect = (panel||this.c).getBoundingClientRect();
       let w = rect.width||0, h = rect.height||0;
@@ -4112,22 +4086,16 @@ def home():
       const s = Math.max(1, Math.min(w, h));
       const px = this.pixelRatio;
       this.c.width = s * px; this.c.height = s * px;
-      this._draw(true);
+      this._draw();
     }
-    _tick(now=performance.now()){
+    _tick(){
       const d = this.target - this.value;
       this.vel = this.vel * 0.82 + d * this.spring;
       this.value += this.vel;
-
-      // draw at 60fps normally, ~30fps on low-power
-      const minDelta = lowPower ? 33 : 16;
-      if (now - this._lastDraw >= minDelta) {
-        this._draw();
-        this._lastDraw = now;
-      }
+      this._draw();
       requestAnimationFrame(this._tick);
     }
-    _draw(force=false){
+    _draw(){
       const ctx=this.ctx, W=this.c.width, H=this.c.height;
       if (!W || !H) return;
       ctx.clearRect(0,0,W,H);
@@ -4141,9 +4109,7 @@ def home():
       ctx.beginPath(); ctx.arc(0,0,(R+inner)/2, 0, Math.PI*2); ctx.stroke();
 
       // fill
-      const p=clamp01(this.value), maxAng=p*Math.PI*2;
-      const baseSegs = lowPower ? 100 : 220;
-      const segs = Math.max(60, Math.round(baseSegs * Math.min(1, Math.min(W,H)/(520*this.pixelRatio))));
+      const p=clamp01(this.value), maxAng=p*Math.PI*2, segs=220;
       for(let i=0;i<segs;i++){
         const t0=i/segs; if(t0>=p) break;
         const a0=t0*maxAng, a1=((i+1)/segs)*maxAng;
@@ -4153,20 +4119,18 @@ def home():
         ctx.stroke();
       }
 
-      // specular sweep (skip on low-power)
-      if (!lowPower){
-        const sp = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sweep-speed')) || (prefersReduced? .04 : .12);
-        const t = performance.now()/1000;
-        const sweepAng = (t * sp) % (Math.PI*2);
-        ctx.save(); ctx.rotate(sweepAng);
-        const dotR = Math.max(4*this.pixelRatio, (R-inner)*0.22);
-        const grad = ctx.createRadialGradient((R+inner)/2,0, 2, (R+inner)/2,0, dotR);
-        grad.addColorStop(0, 'rgba(255,255,255,.95)');
-        grad.addColorStop(1, 'rgba(255,255,255,0)');
-        ctx.fillStyle = grad; ctx.beginPath();
-        ctx.arc((R+inner)/2,0, dotR, 0, Math.PI*2); ctx.fill();
-        ctx.restore();
-      }
+      // specular sweep
+      const sp = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sweep-speed')) || (prefersReduced? .04 : .12);
+      const t = performance.now()/1000;
+      const sweepAng = (t * sp) % (Math.PI*2);
+      ctx.save(); ctx.rotate(sweepAng);
+      const dotR = Math.max(4*this.pixelRatio, (R-inner)*0.22);
+      const grad = ctx.createRadialGradient((R+inner)/2,0, 2, (R+inner)/2,0, dotR);
+      grad.addColorStop(0, 'rgba(255,255,255,.95)');
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = grad; ctx.beginPath();
+      ctx.arc((R+inner)/2,0, dotR, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
 
       ctx.restore();
     }
@@ -4175,7 +4139,7 @@ def home():
       const r=(a>>16)&255, g=(a>>8)&255, bl=a&255;
       const r2=(b>>16)&255, g2=(b>>8)&255, bl2=b&255;
       const m=(x,y)=>Math.round(x+(y-x)*k);
-      return `#${m(r,r2).toString(16).padStart(2,'0')}${m(g,g2).toString(16).padStart(2,'0')}${m(bl,bl2).toString(16,'0')}`;
+      return `#${m(r,r2).toString(16).padStart(2,'0')}${m(g,g2).toString(16).padStart(2,'0')}${m(bl,bl2).toString(16).padStart(2,'0')}`;
     }
     _colorAt(t){
       const acc = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#49c2ff';
@@ -4253,13 +4217,7 @@ def home():
   btnRouteFetch.onclick = async (e)=>{ e.preventDefault(); await fetchRouteOnce(); };
 
   let autoTimer=null;
-  function startAuto(){
-    stopAuto();
-    btnAuto.setAttribute('aria-pressed','true'); btnAuto.textContent="Auto: On";
-    fetchOnce();
-    const ms = lowPower ? 90*1000 : 60*1000; // longer interval on low-power
-    autoTimer=setInterval(fetchOnce, ms);
-  }
+  function startAuto(){ stopAuto(); btnAuto.setAttribute('aria-pressed','true'); btnAuto.textContent="Auto: On"; fetchOnce(); autoTimer=setInterval(fetchOnce, 60*1000); }
   function stopAuto(){ if(autoTimer) clearInterval(autoTimer); autoTimer=null; btnAuto.setAttribute('aria-pressed','false'); btnAuto.textContent="Auto: Off"; }
 
   function isRouteFilled(){ return [lat.value,lon.value,dlat.value,dlon.value].every(v=>v && !isNaN(parseFloat(v))); }
@@ -4268,6 +4226,7 @@ def home():
   async function fetchOnce(){
     if(current.mode==='guess') return fetchGuessOnce();
     if(current.mode==='route') return fetchRouteOnce();
+    // hybrid
     if(isRouteFilled()){
       const [g, r] = await Promise.allSettled([fetchJson('/api/risk/llm_guess'), postJson('/api/risk/llm_route', currentRoute())]);
       const gj = g.status==='fulfilled'? g.value : null;
@@ -4318,7 +4277,6 @@ def home():
 </body>
 </html>
     """, seed_hex=seed_hex, seed_code=seed_code)
-
 
 
 @app.route('/login', methods=['GET', 'POST'])
