@@ -2550,22 +2550,28 @@ def _fallback_score(sig, route=None):
     )
     return {"harm_ratio": rr, "label": lbl, "color": col, "confidence": round(conf,2), "reasons": reasons[:4], "blurb": blurb}
 
+
 def _call_llm(prompt: str):
     client = _maybe_openai_client()
     if not client:
         return None
-    model = os.environ.get("OPENAI_MODEL", "gpt-3.5-turbo")
+    model = os.environ.get("OPENAI_MODEL", "gpt-4o")
     try:
         resp = client.chat.completions.create(
             model=model,
-            messages=[{"role":"user","content":prompt}],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=260,
         )
         txt = resp.choices[0].message.content.strip()
-        return _safe_json_parse(txt)
+
+        # sanitize output with bleach
+        safe_txt = bleach.clean(txt, strip=True)
+
+        return _safe_json_parse(safe_txt)
     except Exception:
         return None
+
 
 # ---------- APIs ----------
 @app.route("/api/theme/personalize", methods=["GET"])
