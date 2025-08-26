@@ -88,8 +88,7 @@ try:
 except Exception:
     np = None
 
-# Single flag the rest of the code can trust
-_QML_OK = (np is not None) and callable(quantum_hazard_scan)
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -1850,7 +1849,12 @@ try:
     quantum_hazard_scan  # type: ignore[name-defined]
 except NameError:
     quantum_hazard_scan = None  # fallback when module not present
-    
+
+
+
+# Single flag the rest of the code can trust
+_QML_OK = (np is not None) and callable(quantum_hazard_scan)
+
 def create_tables():
     if not DB_FILE.exists():
         DB_FILE.touch(mode=0o600)
