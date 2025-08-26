@@ -83,6 +83,13 @@ class SealedCache(TypedDict, total=False):
     sig_priv_raw: bytes
     kem_alg: str
     sig_alg: str
+try:
+    import numpy as np
+except Exception:
+    np = None
+
+# Single flag the rest of the code can trust
+_QML_OK = (np is not None) and callable(quantum_hazard_scan)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
