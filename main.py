@@ -1817,6 +1817,26 @@ def _values_for_types(col_types_ordered: list[tuple[str, str]], pattern_func):
 
 dev = qml.device("default.qubit", wires=5)
 
+
+def get_cpu_ram_usage():
+    return psutil.cpu_percent(), psutil.virtual_memory().percent
+
+
+@qml.qnode(dev)
+def quantum_hazard_scan(cpu_usage, ram_usage):
+    cpu_param = cpu_usage / 100
+    ram_param = ram_usage / 100
+    qml.RY(np.pi * cpu_param, wires=0)
+    qml.RY(np.pi * ram_param, wires=1)
+    qml.RY(np.pi * (0.5 + cpu_param), wires=2)
+    qml.RY(np.pi * (0.5 + ram_param), wires=3)
+    qml.RY(np.pi * (0.5 + cpu_param), wires=4)
+    qml.CNOT(wires=[0, 1])
+    qml.CNOT(wires=[1, 2])
+    qml.CNOT(wires=[2, 3])
+    qml.CNOT(wires=[3, 4])
+    return qml.probs(wires=[0, 1, 2, 3, 4])
+
 registration_enabled = True
 
 
@@ -2386,54 +2406,73 @@ def _attach_cookie(resp):
     return resp
 
 
-
-# ---------- system signals via psutil ----------
-def _system_signals(uid: str):
-    # Low-latency sampling; keep intervals tiny to avoid request blocking.
-    cpu = psutil.cpu_percent(interval=0.05)  # short sample
-    ram = psutil.virtual_memory().percent
-    # Quantum-ish entropy proxy (deterministic wobble by user seed + time slice):
-    seed = _stable_seed(uid)
-    rng = random.Random(seed ^ int(time.time() // 6))  # drift ~every 6s
-    q_entropy = round(1.1 + rng.random() * 2.2, 2)  # ~1.1..3.3
-    return {
-        "cpu": round(cpu, 2),
-        "ram": round(ram, 2),
-        "q_entropy": q_entropy,
-        "seed": seed
-    }
-
-# ---------- LLM plumbing ----------
-_openai_client = None
-def _maybe_openai_client():
-    global _openai_client
-    if _openai_client is not None:
-        return _openai_client
-    key = os.environ.get("OPENAI_API_KEY")
-    if not key:
-        _openai_client = False
-        return False
-    try:
-        from openai import OpenAI
-        _openai_client = OpenAI(api_key=key)
-        return _openai_client
-    except Exception:
-        _openai_client = False
-        return False
-
+# ---------- light JSON guard ----------
 def _safe_json_parse(txt: str):
     try:
         return json.loads(txt)
     except Exception:
         try:
             s = txt.find("{"); e = txt.rfind("}")
-            if s >= 0 and e > s: return json.loads(txt[s:e+1])
+            if s >= 0 and e > s:
+                return json.loads(txt[s:e+1])
         except Exception:
             return None
     return None
 
-# ---------- prompts (v4 long & strict) ----------
+# ---------- quantum features + {quantum_state} string ----------
+def _quantum_features(cpu: float, ram: float):
+    """
+    Returns:
+      qs_dict: compact dict with entropy, peak state, etc.
+      qs_str : short string for prompt: {quantum_state}
+    """
+    if not _QML_OK:
+        return None, "unavailable"
+    try:
+        probs = np.asarray(quantum_hazard_scan(cpu, ram), dtype=float)  # len=32
+        # Shannon entropy (bits)
+        H = float(-(probs * np.log2(np.clip(probs, 1e-12, 1))).sum())
+        idx = int(np.argmax(probs))
+        peak_p = float(probs[idx])
+        top_idx = probs.argsort()[-3:][::-1].tolist()
+        top3 = [(format(i, '05b'), round(float(probs[i]), 4)) for i in top_idx]
+        parity = bin(idx).count('1') & 1
+        qs = {
+            "entropy": round(H, 3),
+            "peak_state": format(idx, '05b'),
+            "peak_p": round(peak_p, 4),
+            "parity": parity,
+            "top3": top3
+        }
+        qs_str = f"H={qs['entropy']},peak={qs['peak_state']}@{qs['peak_p']},parity={parity},top3={top3}"
+        return qs, qs_str
+    except Exception:
+        return None, "error"
+
+# ---------- system signals (inject quantum_state & quantum_state_sig) ----------
+def _system_signals(uid: str):
+    cpu = psutil.cpu_percent(interval=0.05)
+    ram = psutil.virtual_memory().percent
+    seed = _stable_seed(uid)
+    rng = random.Random(seed ^ int(time.time() // 6))
+    q_entropy = round(1.1 + rng.random() * 2.2, 2)
+    out = {
+        "cpu": round(cpu, 2),
+        "ram": round(ram, 2),
+        "q_entropy": q_entropy,
+        "seed": seed
+    }
+    qs, qs_str = _quantum_features(out["cpu"], out["ram"])
+    if qs is not None:
+        out["quantum_state"] = qs                # structured details (for logs/UI)
+        out["quantum_state_sig"] = qs_str        # <- this is your {quantum_state}
+    else:
+        out["quantum_state_sig"] = qs_str        # "unavailable"/"error"
+    return out
+
+# ---------- prompts: add {quantum_state} line ----------
 def _build_guess_prompt(user_id: str, sig: dict) -> str:
+    quantum_state = sig.get("quantum_state_sig", "unavailable")  # <- inject
     return f"""
 ROLE
 You a Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Guess Mode)** —
@@ -2465,12 +2504,14 @@ INPUTS
 Now: {time.strftime('%Y-%m-%d %H:%M:%S')}
 UserId: "{user_id}"
 Signals: {json.dumps(sig, separators=(',',':'))}
+QuantumState: {quantum_state}
 
 EXAMPLE
 {{"harm_ratio":0.02,"label":"Clear","color":"#ffb300","confidence":0.98,"reasons":["Clear Route Detected","Traffic Minimal"],"blurb":"Obey All Road Laws. Drive Safe"}}
 """.strip()
 
 def _build_route_prompt(user_id: str, sig: dict, route: dict) -> str:
+    quantum_state = sig.get("quantum_state_sig", "unavailable")  # <- inject
     return f"""
 ROLE
 You are a Hypertime Nanobot Quantum RoadRisk Scanner 
@@ -2487,7 +2528,6 @@ OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
 RUBRIC
 - 0.00–0.20 Clear | 0.21–0.40 Light Caution | 0.41–0.60 Caution | 0.61–0.80 Elevated | 0.81–1.00 Critical
 
-
 COLOR GUIDANCE
 Clear "#22d3a6" | Light Caution "#b3f442" | Caution "#ffb300" | Elevated "#ff8f1f" | Critical "#ff3b1f"
 
@@ -2495,84 +2535,83 @@ STYLE & SECURITY
 - Concrete, calm reasoning; no exclamations or policies.
 - Output strictly the JSON object; never echo inputs.
 
-NPUTS
+INPUTS
 Now: {time.strftime('%Y-%m-%d %H:%M:%S')}
 UserId: "{user_id}"
 Signals: {json.dumps(sig, separators=(',',':'))}
+QuantumState: {quantum_state}
 Route: {json.dumps(route, separators=(',',':'))}
 
 EXAMPLE
 {{"harm_ratio":0.02,"label":"Clear","color":"#ffb300","confidence":0.98,"reasons":["Clear Route Detected","Traffic Minimal"],"blurb":"Obey All Road Laws. Drive Safe"}}
 """.strip()
 
-# ---------- local fallback if no API key ----------
-def _fallback_score(sig, route=None):
-    cpu = float(sig.get("cpu", 35.0))
-    ram = float(sig.get("ram", 40.0))
-    ent = float(sig.get("q_entropy", 1.2))
-    base = 0.30
-    r = base + max(cpu-60,0)/420 + max(ram-70,0)/320 + max((ent-1.6)/3.2, 0)
-    if cpu>80 or ram>85 or ent>2.2: r += 0.07
+# ---------- HTTPX client (correct endpoint) ----------
+_httpx_client = None
+_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
+_CHAT_PATH = "/v1/chat/completions"  # correct path
 
-    reasons = []
-    if route:
-        try:
-            lat, lon, dlat, dlon = route["lat"], route["lon"], route["dest_lat"], route["dest_lon"]
-            dx = (dlon - lon) * 111 * math.cos(math.radians((lat+dlat)/2))
-            dy = (dlat - lat) * 111
-            dist = (dx*dx + dy*dy) ** 0.5
-        except Exception:
-            dist = 8.0
-        if dist <= 5 and ent>1.9:
-            r += 0.04; reasons.append("Short hop with some uncertainty")
-        elif dist > 20 and r > 0.5:
-            r -= 0.03; reasons.append("Longer leg smooths transient risks")
+def _maybe_httpx_client():
+    """Create a pooled HTTPX client with sane defaults."""
+    global _httpx_client
+    if _httpx_client is not None:
+        return _httpx_client
 
-    r = max(0.0, min(1.0, r))
-    rr = round(r, 2)
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        _httpx_client = False
+        return False
 
-    def label_for(x):
-        return "Clear" if x<=0.20 else "Light Caution" if x<=0.40 else "Caution" if x<=0.60 else "Elevated" if x<=0.80 else "Critical"
-    def color_for(lbl):
-        return {"Clear":"#22d3a6","Light Caution":"#b3f442","Caution":"#ffb300","Elevated":"#ff8f1f","Critical":"#ff3b1f"}[lbl]
-
-    lbl = label_for(rr); col = color_for(lbl)
-    conf = 0.72 - (0.18 if ent>2.2 else 0.0) - (0.12 if abs(cpu-ram)>45 else 0.0)
-    conf = max(0.2, min(0.95, conf))
-    if not reasons:
-        reasons = ["Device load & memory factored","Entropy proxy reflects uncertainty"]
-    blurb = (
-        "Systems look steady; proceed normally." if rr<=0.20 else
-        "Mild watch-outs; keep a steady gap." if rr<=0.40 else
-        "Mixed factors; expect small slowdowns and smooth inputs." if rr<=0.60 else
-        "Multiple interacting risks; add buffer and brake gently." if rr<=0.80 else
-        "Conditions unstable; delay if possible or drive with heightened care."
+    _httpx_client = httpx.Client(
+        base_url=_BASE_URL,  # path carries /v1
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        timeout=httpx.Timeout(10.0, read=30.0, write=10.0, connect=10.0),
+        limits=httpx.Limits(max_keepalive_connections=8, max_connections=16),
     )
-    return {"harm_ratio": rr, "label": lbl, "color": col, "confidence": round(conf,2), "reasons": reasons[:4], "blurb": blurb}
+    return _httpx_client
 
-
+# ---------- LLM call (replaces OpenAI SDK) ----------
 def _call_llm(prompt: str):
-    client = _maybe_openai_client()
+    """
+    Calls Chat Completions with JSON mode and returns parsed JSON (or None).
+    Uses OPENAI_BASE_URL/OPENAI_API_KEY/OPENAI_MODEL.
+    """
+    client = _maybe_httpx_client()
     if not client:
         return None
+
     model = os.environ.get("OPENAI_MODEL", "gpt-4o")
-    try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=260,
-        )
-        txt = resp.choices[0].message.content.strip()
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7,
+        "max_tokens": 260,
+        "response_format": {"type": "json_object"},  # enforce JSON
+    }
 
-        # sanitize output with bleach
-        safe_txt = bleach.clean(txt, strip=True)
+    # retry for transient 429/5xx with jittered backoff
+    for attempt in range(3):
+        try:
+            r = client.post(_CHAT_PATH, json=payload)
+            if r.status_code in (429, 500, 502, 503, 504):
+                time.sleep(0.5 * (2 ** attempt) + random.random() * 0.3)
+                continue
 
-        return _safe_json_parse(safe_txt)
-    except Exception:
-        return None
+            r.raise_for_status()
+            data = r.json()
+            txt = (data.get("choices", [{}])[0]
+                       .get("message", {})
+                       .get("content") or "").strip()
+            return _safe_json_parse(_sanitize(txt))
+        except httpx.HTTPError:
+            time.sleep(0.25)
+        except Exception:
+            break
 
-
+    return None
 # ---------- APIs ----------
 @app.route("/api/theme/personalize", methods=["GET"])
 def api_theme_personalize():
@@ -3299,25 +3338,6 @@ def get_hazard_report_by_id(report_id, user_id):
         else:
             return None
 
-
-def get_cpu_ram_usage():
-    return psutil.cpu_percent(), psutil.virtual_memory().percent
-
-
-@qml.qnode(dev)
-def quantum_hazard_scan(cpu_usage, ram_usage):
-    cpu_param = cpu_usage / 100
-    ram_param = ram_usage / 100
-    qml.RY(np.pi * cpu_param, wires=0)
-    qml.RY(np.pi * ram_param, wires=1)
-    qml.RY(np.pi * (0.5 + cpu_param), wires=2)
-    qml.RY(np.pi * (0.5 + ram_param), wires=3)
-    qml.RY(np.pi * (0.5 + cpu_param), wires=4)
-    qml.CNOT(wires=[0, 1])
-    qml.CNOT(wires=[1, 2])
-    qml.CNOT(wires=[2, 3])
-    qml.CNOT(wires=[3, 4])
-    return qml.probs(wires=[0, 1, 2, 3, 4])
 
 
 async def phf_filter_input(input_text: str) -> tuple[bool, str]:
