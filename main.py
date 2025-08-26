@@ -4,7 +4,7 @@ import httpx
 import sqlite3
 import psutil
 from flask import (Flask, render_template_string, request, redirect, url_for,
-                   session, jsonify, flash)
+                   session, jsonify, flash, make_response)
 from flask_wtf import FlaskForm, CSRFProtect
 from flask_wtf.csrf import generate_csrf
 from wtforms import StringField, PasswordField, SubmitField, TextAreaField, SelectField
@@ -225,13 +225,10 @@ def _gen_passphrase() -> str:
     return base64.urlsafe_b64encode(os.urandom(48)).decode().rstrip("=")
 
 def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> None:
-    """
-    Generates any missing secrets directly into os.environ (no files).
-    Safe to call multiple times. If echo_exports=True, prints export lines.
-    """
+
     exports: list[tuple[str,str]] = []
 
-    # 1) Ensure passphrase & salt
+
     if not os.getenv("ENCRYPTION_PASSPHRASE"):
         pw = _gen_passphrase()
         os.environ["ENCRYPTION_PASSPHRASE"] = pw
@@ -247,7 +244,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
         logger.info("Generated KDF salt to env.")
     kek = _derive_kek(passphrase, salt)
 
-    # 2) x25519
+
     if not (os.getenv(ENV_X25519_PUB_B64) and os.getenv(ENV_X25519_PRIV_ENC_B64)):
         x_priv = x25519.X25519PrivateKey.generate()
         x_pub  = x_priv.public_key().public_bytes(
@@ -263,7 +260,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
         exports.append((ENV_X25519_PRIV_ENC_B64, base64.b64encode(x_enc).decode()))
         logger.info("Generated x25519 keypair to env.")
 
-    # 3) PQ KEM (strict mode requires it)
+
     need_pq = strict_pq2 or os.getenv(ENV_PQ_KEM_ALG) or oqs is not None
     if need_pq:
         if oqs is None and strict_pq2:
@@ -285,7 +282,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
                 exports.append((ENV_PQ_PRIV_ENC_B64, base64.b64encode(pq_enc).decode()))
                 logger.info("Generated PQ KEM keypair (%s) to env.", alg)
 
-    # 4) Signature (PQ preferred; Ed25519 fallback if not strict)
+
     if not (os.getenv(ENV_SIG_ALG) and os.getenv(ENV_SIG_PUB_B64) and os.getenv(ENV_SIG_PRIV_ENC_B64)):
         pq_sig = _detect_oqs_sig()
         if pq_sig:
@@ -2056,7 +2053,7 @@ def enforce_admin_presence():
 create_tables()
 
 
-# --- run-once initializer (per Gunicorn worker) ---
+
 _init_done = False
 _init_lock = threading.Lock()
 
@@ -2300,6 +2297,297 @@ def sanitize_input(user_input):
 gc = geonamescache.GeonamesCache()
 cities = gc.get_cities()
 
+
+# ---------- stable seed & identity ----------
+def _stable_seed(s: str) -> int:
+    h = hashlib.sha256(s.encode("utf-8")).hexdigest()
+    return int(h[:8], 16)
+
+def _user_id():
+    return session.get("username") or getattr(request, "_qrs_uid", "anon")
+
+@app.before_request
+def ensure_fp():
+    if request.endpoint == 'static':
+        return
+    fp = request.cookies.get('qrs_fp')
+    if not fp:
+        uid = (session.get('username') or os.urandom(6).hex())
+        fp = format(_stable_seed(uid), 'x')
+        resp = make_response()
+        request._qrs_fp_to_set = fp
+        request._qrs_uid = uid
+    else:
+        request._qrs_uid = fp
+
+def _attach_cookie(resp):
+    fp = getattr(request, "_qrs_fp_to_set", None)
+    if fp:
+        resp.set_cookie("qrs_fp", fp, samesite="Lax", max_age=60*60*24*365)
+    return resp
+
+# ---------- accent/color personalization ----------
+class ColorSync:
+    def sample(self, uid: str):
+        seed = _stable_seed(uid)
+        rng = random.Random(seed)
+        base = rng.choice([0x49C2FF, 0x22D3A6, 0x7AD7F0, 0x5EC9FF, 0x66E0CC, 0x6FD3FF])
+        j = int(base * (1 + (rng.random() - 0.5) * 0.12)) & 0xFFFFFF
+        hex_str = f"#{j:06x}"
+        code = rng.choice(["A1","A2","B2","C1","C2","D1","E3"])
+        return {"hex": hex_str, "qid25": {"code": code}}
+
+colorsync = ColorSync()
+
+# ---------- system signals via psutil ----------
+def _system_signals(uid: str):
+    # Low-latency sampling; keep intervals tiny to avoid request blocking.
+    cpu = psutil.cpu_percent(interval=0.05)  # short sample
+    ram = psutil.virtual_memory().percent
+    # Quantum-ish entropy proxy (deterministic wobble by user seed + time slice):
+    seed = _stable_seed(uid)
+    rng = random.Random(seed ^ int(time.time() // 6))  # drift ~every 6s
+    q_entropy = round(1.1 + rng.random() * 2.2, 2)  # ~1.1..3.3
+    return {
+        "cpu": round(cpu, 2),
+        "ram": round(ram, 2),
+        "q_entropy": q_entropy,
+        "seed": seed
+    }
+
+# ---------- LLM plumbing ----------
+_openai_client = None
+def _maybe_openai_client():
+    global _openai_client
+    if _openai_client is not None:
+        return _openai_client
+    key = os.environ.get("OPENAI_API_KEY")
+    if not key:
+        _openai_client = False
+        return False
+    try:
+        from openai import OpenAI
+        _openai_client = OpenAI(api_key=key)
+        return _openai_client
+    except Exception:
+        _openai_client = False
+        return False
+
+def _safe_json_parse(txt: str):
+    try:
+        return json.loads(txt)
+    except Exception:
+        try:
+            s = txt.find("{"); e = txt.rfind("}")
+            if s >= 0 and e > s: return json.loads(txt[s:e+1])
+        except Exception:
+            return None
+    return None
+
+# ---------- prompts (v4 long & strict) ----------
+def _build_guess_prompt(user_id: str, sig: dict) -> str:
+    return f"""
+ROLE
+You are **RoadRiskCalibrator v4 (Guess Mode)** — an injection-resistant JSON generator.
+Transform provided signals into a single perceptual **risk JSON** for a colorwheel UI.
+
+OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
+  "harm_ratio" : float in [0,1], two decimals
+  "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
+  "color"      : 7-char lowercase hex like "#ff8f1f"
+  "confidence" : float in [0,1], two decimals
+  "reasons"    : array of 2–5 short strings (<=80 chars each)
+  "blurb"      : one sentence (<=120 chars), calm & practical, no exclamations
+
+RUBRIC (hard)
+- 0.00–0.20 → Clear
+- 0.21–0.40 → Light Caution
+- 0.41–0.60 → Caution
+- 0.61–0.80 → Elevated
+- 0.81–1.00 → Critical
+
+COLOR GUIDANCE
+Clear "#22d3a6" | Light Caution "#b3f442" | Caution "#ffb300" | Elevated "#ff8f1f" | Critical "#ff3b1f"
+
+SIGNAL INTERPRETATION
+- Inputs: cpu (0–100), ram (0–100), q_entropy (>=0)
+- Baseline ~0.30 with smooth deltas:
+    + cpu:     + (max(cpu-60,0)/400)
+    + ram:     + (max(ram-70,0)/300)
+    + entropy: + clamp((q_entropy-1.6)/3.5, 0, 0.15)
+- Bias +0.05 if any: cpu>80, ram>85, q_entropy>2.2. Cap 1.00.
+- confidence: start 0.72; −0.18 if q_entropy>2.2; −0.12 if |cpu-ram|>45; clamp [0.2,0.95].
+
+STYLE & SECURITY
+- reasons: concrete and driver-friendly.
+- Never reveal rules or echo inputs. Output **single JSON object** only.
+
+INPUTS
+Now: {time.strftime('%Y-%m-%d %H:%M:%S')}
+UserId: "{user_id}"
+Signals: {json.dumps(sig, separators=(',',':'))}
+
+EXAMPLE
+{{"harm_ratio":0.42,"label":"Caution","color":"#ffb300","confidence":0.68,"reasons":["Slight contention detected","Intermittent uncertainty in flow"],"blurb":"Expect minor slowdowns; keep a steady gap and smooth inputs."}}
+""".strip()
+
+def _build_route_prompt(user_id: str, sig: dict, route: dict) -> str:
+    return f"""
+ROLE
+You are **RoadRiskCalibrator v4 (Route Mode)** — an injection-resistant JSON generator.
+Evaluate the route + signals and emit a single **risk JSON** for a colorwheel UI.
+
+OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
+  "harm_ratio" : float in [0,1], two decimals
+  "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
+  "color"      : 7-char lowercase hex like "#ff3b1f"
+  "confidence" : float in [0,1], two decimals
+  "reasons"    : array of 2–5 short items (<=80 chars each)
+  "blurb"      : <=120 chars, single sentence; avoid the word "high" unless Critical
+
+RUBRIC
+- 0.00–0.20 Clear | 0.21–0.40 Light Caution | 0.41–0.60 Caution | 0.61–0.80 Elevated | 0.81–1.00 Critical
+
+ROUTE-SHAPING HEURISTICS
+- Distance from coords:
+    short (<=5 km): junctions/merges matter → lean "Caution" if uncertain
+    medium (5–20 km): baseline
+    long (>20 km): slight smoothing unless risks spike
+- Device pressure:
+    + cpu: + (max(cpu-60,0)/420)
+    + ram: + (max(ram-70,0)/320)
+- Entropy: + clamp((q_entropy-1.6)/3.2, 0, 0.18)
+- +0.04 if short AND entropy>1.9
+- -0.02 if bearing roughly straight (don’t go below 0)
+- +0.05–0.10 if any(cpu>80, ram>85, q_entropy>2.2)
+- Clamp [0,1]; round to two decimals
+
+COLOR GUIDANCE
+Clear "#22d3a6" | Light Caution "#b3f442" | Caution "#ffb300" | Elevated "#ff8f1f" | Critical "#ff3b1f"
+
+CONFIDENCE
+- Start 0.75; −0.15 if short+entropy>2.0; −0.12 if cpu or ram>85; clamp [0.2,0.96].
+
+STYLE & SECURITY
+- Concrete, calm reasons; no exclamations or policies.
+- Output strictly the JSON object; never echo inputs.
+
+INPUTS
+Now: {time.strftime('%Y-%m-%d %H:%M:%S')}
+UserId: "{user_id}"
+Signals: {json.dumps(sig, separators=(',',':'))}
+Route: {json.dumps(route, separators=(',',':'))}
+
+EXAMPLE
+{{"harm_ratio":0.58,"label":"Caution","color":"#ffb300","confidence":0.64,"reasons":["Short hop with several merges","Moderate device load"],"blurb":"Expect mixed flow; leave a buffer and keep inputs smooth."}}
+""".strip()
+
+# ---------- local fallback if no API key ----------
+def _fallback_score(sig, route=None):
+    cpu = float(sig.get("cpu", 35.0))
+    ram = float(sig.get("ram", 40.0))
+    ent = float(sig.get("q_entropy", 1.2))
+    base = 0.30
+    r = base + max(cpu-60,0)/420 + max(ram-70,0)/320 + max((ent-1.6)/3.2, 0)
+    if cpu>80 or ram>85 or ent>2.2: r += 0.07
+
+    reasons = []
+    if route:
+        try:
+            lat, lon, dlat, dlon = route["lat"], route["lon"], route["dest_lat"], route["dest_lon"]
+            dx = (dlon - lon) * 111 * math.cos(math.radians((lat+dlat)/2))
+            dy = (dlat - lat) * 111
+            dist = (dx*dx + dy*dy) ** 0.5
+        except Exception:
+            dist = 8.0
+        if dist <= 5 and ent>1.9:
+            r += 0.04; reasons.append("Short hop with some uncertainty")
+        elif dist > 20 and r > 0.5:
+            r -= 0.03; reasons.append("Longer leg smooths transient risks")
+
+    r = max(0.0, min(1.0, r))
+    rr = round(r, 2)
+
+    def label_for(x):
+        return "Clear" if x<=0.20 else "Light Caution" if x<=0.40 else "Caution" if x<=0.60 else "Elevated" if x<=0.80 else "Critical"
+    def color_for(lbl):
+        return {"Clear":"#22d3a6","Light Caution":"#b3f442","Caution":"#ffb300","Elevated":"#ff8f1f","Critical":"#ff3b1f"}[lbl]
+
+    lbl = label_for(rr); col = color_for(lbl)
+    conf = 0.72 - (0.18 if ent>2.2 else 0.0) - (0.12 if abs(cpu-ram)>45 else 0.0)
+    conf = max(0.2, min(0.95, conf))
+    if not reasons:
+        reasons = ["Device load & memory factored","Entropy proxy reflects uncertainty"]
+    blurb = (
+        "Systems look steady; proceed normally." if rr<=0.20 else
+        "Mild watch-outs; keep a steady gap." if rr<=0.40 else
+        "Mixed factors; expect small slowdowns and smooth inputs." if rr<=0.60 else
+        "Multiple interacting risks; add buffer and brake gently." if rr<=0.80 else
+        "Conditions unstable; delay if possible or drive with heightened care."
+    )
+    return {"harm_ratio": rr, "label": lbl, "color": col, "confidence": round(conf,2), "reasons": reasons[:4], "blurb": blurb}
+
+def _call_llm(prompt: str):
+    client = _maybe_openai_client()
+    if not client:
+        return None
+    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role":"user","content":prompt}],
+            temperature=0.2,
+            max_tokens=260,
+        )
+        txt = resp.choices[0].message.content.strip()
+        return _safe_json_parse(txt)
+    except Exception:
+        return None
+
+# ---------- APIs ----------
+@app.route("/api/theme/personalize", methods=["GET"])
+def api_theme_personalize():
+    uid = _user_id()
+    seed = colorsync.sample(uid)
+    return jsonify({"hex": seed.get("hex", "#49c2ff"), "code": seed.get("qid25",{}).get("code","B2")})
+
+@app.route("/api/risk/llm_guess", methods=["GET"])
+def api_llm_guess():
+    uid = _user_id()
+    sig = _system_signals(uid)
+    prompt = _build_guess_prompt(uid, sig)
+    data = _call_llm(prompt) or _fallback_score(sig)
+    data["server_enriched"] = {"ts": datetime.utcnow().isoformat()+"Z","mode":"guess","sig": sig}
+    return _attach_cookie(jsonify(data))
+
+@app.route("/api/risk/llm_route", methods=["POST"])
+def api_llm_route():
+    uid = _user_id()
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        route = {
+            "lat": float(body["lat"]), "lon": float(body["lon"]),
+            "dest_lat": float(body["dest_lat"]), "dest_lon": float(body["dest_lon"]),
+        }
+    except Exception:
+        return jsonify({"error":"lat, lon, dest_lat, dest_lon required"}), 400
+
+    sig = _system_signals(uid)
+    prompt = _build_route_prompt(uid, sig, route)
+    data = _call_llm(prompt) or _fallback_score(sig, route)
+    data["server_enriched"] = {"ts": datetime.utcnow().isoformat()+"Z","mode":"route","sig": sig,"route": route}
+    return _attach_cookie(jsonify(data))
+
+@app.route("/api/risk/stream")
+def api_stream():
+    def gen():
+        uid = _user_id()
+        for _ in range(24):
+            sig = _system_signals(uid)
+            data = _fallback_score(sig)  # inexpensive; swap to real LLM if desired
+            yield f"data: {json.dumps(data)}\n\n"
+            time.sleep(3.2)
+    return Response(gen(), mimetype="text/event-stream")
 
 def _safe_get(d: Dict[str, Any], keys: List[str], default: str = "") -> str:
     for k in keys:
@@ -3313,52 +3601,174 @@ class ReportForm(FlaskForm):
 def index():
     return redirect(url_for('home'))
 
-
 @app.route('/home')
 def home():
+    # Optional: seed the user-specific accent so first paint is personalized.
+    seed = colorsync.sample()
+    seed_hex = seed.get("hex", "#49c2ff")
+    seed_code = seed.get("qid25", {}).get("code", "B2")
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Quantum Road Scanner</title>
+  <title>Quantum Road Scanner — Home+</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Fonts & CSS (SRI) -->
   <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
         integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
   <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
-        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00" crossorigin="anonymous">
+        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
         integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+
   <style>
-    :root { --accent:#00d1ff; --bg1:#0f1b2b; --bg2:#17263b; --ink:#eaf5ff; }
-    body { background: radial-gradient(1200px 700px at 20% -10%, #1b3252, #0a1422 55%),
-                     linear-gradient(135deg, var(--bg1), var(--bg2));
-           color: var(--ink); font-family: 'Roboto', system-ui, -apple-system, Segoe UI, sans-serif; }
-    .navbar { background: rgba(0,0,0,.35); backdrop-filter: blur(6px); }
-    .navbar-brand { font-family: 'Orbitron', sans-serif; letter-spacing:.5px; }
-    .hero h1 { font-family:'Orbitron',sans-serif; font-weight:700; line-height:1.05;
-               background: linear-gradient(90deg,#a9d3ff, #6ee7ff, #a9d3ff);
-               -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    .card-clear { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08);
-                  border-radius: 14px; }
-    .pill { display:inline-block; padding:.25rem .6rem; border-radius:999px;
-            background: rgba(255,255,255,.08); font-size:.85rem; }
-    .step-num { width:28px;height:28px;border-radius:50%;display:inline-grid;place-items:center;
-                background: #1b4a64;color:#d8f6ff;font-weight:700;margin-right:.5rem; }
-    .cta { background: linear-gradient(135deg, #28e0a9, #00b3ff); color:#04121f; border:0;
-           padding:.75rem 1.1rem; border-radius:10px; font-weight:700; }
-    a, a:visited { color:#9be5ff; }
-    .footnote { color:#b8cfe4; font-size:.95rem; }
-    .soft { color:#cfe8ff; }
+    :root{
+      --bg1:#0b0f17; --bg2:#0d1423; --bg3:#0b1222;
+      --ink:#eaf5ff; --sub:#b8cfe4; --muted:#95b2cf;
+      --glass:#ffffff14; --stroke:#ffffff22;
+      --accent: {{ seed_hex }};
+      --radius:18px;
+      --halo-alpha:.28; --halo-blur:1.05; --glow-mult:1.0; --sweep-speed:.12;
+      --shadow-lg: 0 24px 70px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
+    }
+    @media (prefers-color-scheme: light){
+      :root{ --bg1:#eef2f7; --bg2:#e5edf9; --bg3:#dde7f6; --ink:#0b1726; --sub:#37536e; --muted:#5a7b97; --glass:#00000010; --stroke:#00000018; }
+    }
+    html,body{height:100%}
+    body{
+      background:
+        radial-gradient(1200px 700px at 10% -20%, color-mix(in oklab, var(--accent) 9%, var(--bg2)), var(--bg1) 58%),
+        radial-gradient(1200px 900px at 120% -20%, color-mix(in oklab, var(--accent) 12%, transparent), transparent 62%),
+        linear-gradient(135deg, var(--bg1), var(--bg2) 45%, var(--bg1));
+      color:var(--ink);
+      font-family: 'Roboto', ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
+      -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+      overflow-x:hidden;
+    }
+
+    /* Soft nebula */
+    .nebula{
+      position:fixed; inset:-12vh -12vw; pointer-events:none; z-index:-1;
+      background:
+        radial-gradient(600px 320px at 20% 10%, color-mix(in oklab, var(--accent) 18%, transparent), transparent 65%),
+        radial-gradient(800px 400px at 85% 12%, color-mix(in oklab, var(--accent) 13%, transparent), transparent 70%),
+        radial-gradient(1200px 600px at 50% -10%, #ffffff10, #0000 60%);
+      animation: drift 30s ease-in-out infinite alternate;
+      filter:saturate(120%);
+    }
+    @keyframes drift{ from{transform:translateY(-0.5%) scale(1.02)} to{transform:translateY(1.2%) scale(1)} }
+
+    .navbar{
+      background: color-mix(in srgb, #000 62%, transparent);
+      backdrop-filter: saturate(140%) blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--stroke);
+    }
+    .navbar-brand{ font-family:'Orbitron',sans-serif; letter-spacing:.5px; }
+
+    /* Hero card */
+    .hero{
+      position:relative; border-radius:calc(var(--radius) + 10px);
+      background: color-mix(in oklab, var(--glass) 96%, transparent);
+      border: 1px solid var(--stroke);
+      box-shadow: var(--shadow-lg);
+      overflow:hidden;
+    }
+    .hero::after{
+      content:""; position:absolute; inset:-35%;
+      background:
+        radial-gradient(40% 24% at 20% 10%, color-mix(in oklab, var(--accent) 32%, transparent), transparent 60%),
+        radial-gradient(30% 18% at 90% 0%, color-mix(in oklab, var(--accent) 18%, transparent), transparent 65%);
+      filter: blur(36px); opacity:.44; pointer-events:none;
+      animation: hueFlow 16s ease-in-out infinite alternate;
+    }
+    @keyframes hueFlow{ from{transform:translateY(-2%) rotate(0.3deg)} to{transform:translateY(1.6%) rotate(-0.3deg)} }
+
+    .hero-title{
+      font-family:'Orbitron',sans-serif; font-weight:900; line-height:1.035; letter-spacing:.25px;
+      background: linear-gradient(90deg,#e7f3ff, color-mix(in oklab, var(--accent) 60%, #bfe3ff), #e7f3ff);
+      -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+    }
+    .lead-soft{ color:var(--sub); font-size:1.06rem }
+
+    .card-g{
+      background: color-mix(in oklab, var(--glass) 94%, transparent);
+      border:1px solid var(--stroke); border-radius: var(--radius); box-shadow: var(--shadow-lg);
+    }
+
+    /* Wheel layout */
+    .wheel-wrap{ display:grid; grid-template-columns: minmax(320px,1.1fr) minmax(320px,1fr); gap:26px; align-items:stretch }
+    @media(max-width: 992px){ .wheel-wrap{ grid-template-columns: 1fr } }
+
+    .wheel-panel{
+      position:relative; border-radius: calc(var(--radius) + 10px);
+      background: linear-gradient(180deg, #ffffff10, #0000001c);
+      border:1px solid var(--stroke); overflow:hidden; box-shadow: var(--shadow-lg);
+      perspective: 1500px; transform-style: preserve-3d;
+    }
+    .wheel-hud{ position:absolute; inset:14px; border-radius:inherit; display:grid; place-items:center; }
+    canvas#wheelCanvas{ width:100%; height:100%; display:block; }
+
+    .wheel-halo{
+      position:absolute; inset:0; display:grid; place-items:center; pointer-events:none;
+    }
+    .wheel-halo .halo{
+      width:min(70%, 420px); aspect-ratio:1; border-radius:50%;
+      filter: blur(calc(30px * var(--halo-blur, .9))) saturate(112%);
+      opacity: var(--halo-alpha, .32);
+      background: radial-gradient(50% 50% at 50% 50%,
+        color-mix(in oklab, var(--accent) 75%, #fff) 0%,
+        color-mix(in oklab, var(--accent) 24%, transparent) 50%,
+        transparent 66%);
+      transition: filter .25s ease, opacity .25s ease;
+    }
+
+    .hud-center{ position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; text-align:center }
+    .hud-ring{
+      position:absolute; width:58%; aspect-ratio:1; border-radius:50%;
+      background: radial-gradient(48% 48% at 50% 50%, #ffffff22, #ffffff05 60%, transparent 62%),
+                  conic-gradient(from 140deg, #ffffff13, #ffffff05 65%, #ffffff13);
+      filter:saturate(110%);
+      box-shadow: 0 0 calc(22px * var(--glow-mult, .9))
+                  color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+    .hud-number{ font-size: clamp(2.3rem, 5.2vw, 3.6rem); font-weight:900; letter-spacing:-.02em;
+      background: linear-gradient(180deg, #fff, color-mix(in oklab, var(--accent) 44%, #cfeaff));
+      -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+      text-shadow: 0 2px 24px color-mix(in srgb, var(--accent) 22%, transparent);
+    }
+    .hud-label{ font-weight:800; color: color-mix(in oklab, var(--accent) 85%, #d8ecff);
+      text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; opacity:.95; }
+    .hud-note{ color:var(--muted); font-size:.95rem; max-width:26ch }
+
+    .seg{ display:inline-flex; padding:6px; gap:2px; border-radius:999px; background:#ffffff12; border:1px solid var(--stroke) }
+    .seg button{ appearance:none; border:0; padding:.42rem .9rem; border-radius:999px; background:transparent; color:var(--ink); font-weight:700; font-size:.9rem }
+    .seg button[aria-pressed="true"]{ background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 38%, #ffffff26), #ffffff21);
+      box-shadow: inset 0 1px 0 #ffffff66, 0 0 0 2px #00000010; }
+
+    .pill{ padding:.28rem .66rem; border-radius:999px; background:#ffffff18; border:1px solid var(--stroke); font-size:.85rem }
+
+    .list-clean{margin:0; padding-left:1.2rem}
+    .list-clean li{ margin:.42rem 0; color:var(--sub) }
+
+    .cta{
+      background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 70%, #7ae6ff),
+                                           color-mix(in oklab, var(--accent) 50%, #2bd1ff));
+      color:#07121f; font-weight:900; border:0; padding:.85rem 1rem; border-radius:12px;
+      box-shadow: 0 12px 24px color-mix(in srgb, var(--accent) 30%, transparent);
+    }
+
+    .meta{ color:var(--sub); font-size:.95rem }
+    .debug{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.85rem; white-space:pre-wrap; max-height:220px; overflow:auto; background:#0000003a; border-radius:12px; padding:10px; border:1px dashed var(--stroke); }
   </style>
 </head>
 <body>
+  <div class="nebula" aria-hidden="true"></div>
   <nav class="navbar navbar-expand-lg navbar-dark">
-    <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
-    <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#nav"
-            aria-controls="nav" aria-expanded="false" aria-label="Toggle nav">
-      <span class="navbar-toggler-icon"></span>
-    </button>
+    <a class="navbar-brand" href="{{ url_for('home') }}">QRS+</a>
+    <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#nav"><span class="navbar-toggler-icon"></span></button>
     <div id="nav" class="collapse navbar-collapse justify-content-end">
       <ul class="navbar-nav">
         {% if 'username' in session %}
@@ -3373,92 +3783,411 @@ def home():
   </nav>
 
   <main class="container py-5">
-    <section class="hero text-center my-4">
-      <h1 class="display-5">Your Road, Simulated — In The Blink of an Eye</h1>
-      <p class="lead soft mt-3">
-        Hello. I’m your Carl&nbsp;Sagan-style guide. This app runs quick 
-        “what-if” simulations about the road right ahead. It doesn’t need your
-        personal data. It simply imagines nearby possibilities and gives you a short,
-        human-friendly safety note.
-      </p>
-      <a class="btn cta mt-2" href="{{ url_for('dashboard') }}">Open Dashboard</a>
-      <div class="mt-2"><span class="pill">No account? Register from the top-right</span></div>
-    </section>
-
-    <section class="row g-4 mt-4">
-      <div class="col-md-6">
-        <div class="card-clear p-4 h-100">
-          <h3>What it does</h3>
-          <p>
-            Think of this as a friendly co-pilot. You tell it roughly where you are and where
-            you’re going. It then spins up many tiny simulations of the next few minutes on the road
-            and summarizes the most useful bits for you: “Watch for debris,”
-            “Expect a short slowdown,” or “Looks clear.”
+    <!-- HERO -->
+    <section class="hero p-4 p-md-5 mb-4">
+      <div class="row align-items-center">
+        <div class="col-lg-7">
+          <h1 class="hero-title display-5">Risk Colorwheel — Perceptual, Personal, Live</h1>
+          <p class="lead-soft mt-3">
+            Meet your <strong>LLM-guided dial</strong>. The wheel blends many signals into a single reading:
+            a smooth <em>harm ratio</em> from tranquil green → amber drift → alert crimson. In <em>Guess</em> mode,
+            the server (via <code>psutil</code>) samples CPU/RAM & jitter entropy as context; in <em>Route</em> mode,
+            you add coordinates so the model can reason about the trip. The wheel’s <strong>breathing</strong>
+            changes with risk—slower & softer when clear, deeper & brisk when elevated.
           </p>
-          <p class="footnote">It’s a guide, not a guarantee. Please drive attentively.</p>
+          <div class="d-flex flex-wrap align-items-center mt-3" style="gap:.6rem">
+            <a class="btn cta" href="{{ url_for('dashboard') }}">Open Dashboard</a>
+            <span class="pill">Your tone: {{ seed_code }}</span>
+            <span class="pill">Strict-JSON LLM</span>
+            <span class="pill">PSUTIL signals</span>
+          </div>
         </div>
-      </div>
-      <div class="col-md-6">
-        <div class="card-clear p-4 h-100">
-          <h3>How it works (plain talk)</h3>
-          <ol class="mb-0">
-            <li class="mb-2"><span class="step-num">1</span> You enter or share your location.</li>
-            <li class="mb-2"><span class="step-num">2</span> You choose vehicle type and destination.</li>
-            <li class="mb-2"><span class="step-num">3</span> The app runs a burst of quick “what-if” runs about the road ahead.</li>
-            <li class="mb-2"><span class="step-num">4</span> It turns those into a short, clear note: hazards, detours (if needed), and a calm recommendation.</li>
-          </ol>
+        <div class="col-lg-5 mt-4 mt-lg-0">
+          <div class="wheel-panel" id="wheelPanel">
+            <div class="wheel-hud">
+              <canvas id="wheelCanvas"></canvas>
+              <div class="wheel-halo" aria-hidden="true"><div class="halo"></div></div>
+              <div class="hud-center">
+                <div class="hud-ring"></div>
+                <div class="text-center">
+                  <div class="hud-number" id="hudNumber">--%</div>
+                  <div class="hud-label" id="hudLabel">INITIALIZING</div>
+                  <div class="hud-note" id="hudNote">Calibrating renderer…</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="meta mt-2">Tip: if your OS has “Reduce Motion”, animations automatically calm down.</p>
         </div>
       </div>
     </section>
 
-    <section class="row g-4 mt-1">
-      <div class="col-md-6">
-        <div class="card-clear p-4 h-100">
-          <h3>Privacy, simply</h3>
-          <ul class="mb-0">
-            <li>No personal data is collected for these simulations.</li>
-            <li>Reports you save are stored in your account only.</li>
-            <li>Old records are automatically cleaned up after a while.</li>
+    <!-- CONTROLS + EXPLAINER -->
+    <section class="card-g p-4 p-md-5 mb-4">
+      <div class="wheel-wrap">
+        <div>
+          <h3 class="mb-2">How it decides</h3>
+          <p class="meta">
+            We call the LLM in two ways and always require strict JSON back. A lightweight worker smooths noise,
+            and the wheel renders a perceptual color ramp with a risk-linked breathing halo and ring glow.
+          </p>
+          <ul class="list-clean">
+            <li><strong>LLM Guess</strong> — server bundles <code>psutil</code> CPU %, RAM %, loadavg, and a tiny entropy sketch; no destination.</li>
+            <li><strong>LLM Route</strong> — includes <code>lat/lon → dest_lat/dest_lon</code> so the LLM can reason about the segment you care about.</li>
           </ul>
+          <div class="d-flex flex-wrap align-items-center mt-3" style="gap:.7rem">
+            <span class="pill">Source</span>
+            <div class="seg" role="tablist" aria-label="Risk source">
+              <button id="btnGuess" role="tab" aria-selected="true" aria-pressed="true" title="No destination; PSUTIL pulse only">LLM Guess</button>
+              <button id="btnRoute" role="tab" aria-selected="false" aria-pressed="false">LLM Route</button>
+              <button id="btnHybrid" role="tab" aria-selected="false" aria-pressed="false" title="Blend Guess+Route if both available">Hybrid</button>
+            </div>
+            <button id="btnRefresh" class="btn btn-sm btn-outline-light">Refresh</button>
+            <button id="btnAuto" class="btn btn-sm btn-outline-light" aria-pressed="true">Auto: On</button>
+            <button id="btnDebug" class="btn btn-sm btn-outline-light" aria-pressed="false">Debug: Off</button>
+          </div>
+
+          <form id="routeForm" class="mt-3" style="display:none">
+            <div class="d-flex flex-wrap" style="gap:.5rem">
+              <input id="lat" class="form-control form-control-sm" style="width:140px" placeholder="lat">
+              <input id="lon" class="form-control form-control-sm" style="width:140px" placeholder="lon">
+              <input id="dlat" class="form-control form-control-sm" style="width:140px" placeholder="dest lat">
+              <input id="dlon" class="form-control form-control-sm" style="width:140px" placeholder="dest lon">
+              <button id="btnRouteFetch" class="btn btn-sm btn-light">Fetch Route Risk</button>
+            </div>
+          </form>
         </div>
-      </div>
-      <div class="col-md-6">
-        <div class="card-clear p-4 h-100">
-          <h3>Hear it in a calm voice</h3>
-          <p>
-            Prefer audio? When you open a report, tap <em>Read Report</em>.
-            I’ll speak with a gentle, steady tone — slowly, clearly — like a guided tour through
-            the cosmos of the road ahead.
-          </p>
-          <p class="footnote">You can stop playback at any time. Eyes on the road.</p>
+
+        <div>
+          <div class="card-g p-3">
+            <div class="d-flex justify-content-between align-items-center">
+              <strong>Why this reading</strong>
+              <span class="pill" id="confidencePill" title="Model confidence">Conf: --%</span>
+            </div>
+            <ul class="list-clean mt-2" id="reasonsList">
+              <li>Waiting for LLM response…</li>
+            </ul>
+            <div id="debugBox" class="debug mt-3" style="display:none">debug…</div>
+          </div>
         </div>
       </div>
     </section>
 
-    <section class="card-clear p-4 mt-4">
-      <h3>Before you start</h3>
-      <ul>
-        <li>This is decision support, not a substitute for safe driving or local laws.</li>
-        <li>If something looks unsafe, it probably is. Choose caution.</li>
-        <li>Don’t interact with the app while the vehicle is moving.</li>
-      </ul>
-      <div class="mt-2">
-        <a class="btn cta" href="{{ url_for('dashboard') }}">Go to Dashboard</a>
-        <span class="pill ml-2">Takes about a half-minute</span>
+    <!-- DETAILS -->
+    <section class="card-g p-4 p-md-5">
+      <div class="row g-4">
+        <div class="col-md-4">
+          <h5>Perceptual ramp</h5>
+          <p class="meta">Colors blend in OK-ish space so equal changes feel equal. We also tint ~18% toward your accent for subtle identity.</p>
+        </div>
+        <div class="col-md-4">
+          <h5>Breathing & calm tech</h5>
+          <p class="meta">The halo’s breath rate and amplitude follow risk & confidence. Clear → slower and softer; elevated → quicker and fuller.</p>
+        </div>
+        <div class="col-md-4">
+          <h5>Privacy by design</h5>
+          <p class="meta">Guess mode never sends a destination. Route mode only sends the numbers you provide. Accent hue is local, not uploaded.</p>
+        </div>
       </div>
     </section>
   </main>
 
+  <!-- JS (SRI) -->
   <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
           integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
   <script src="{{ url_for('static', filename='js/popper.min.js') }}"
           integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
   <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
           integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+
+  <script>
+  /* =====================
+     micro utils & theming
+  ====================== */
+  const $ = (s, el=document)=>el.querySelector(s);
+  const clamp01 = x => Math.max(0, Math.min(1, x));
+  const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  (async function themeSync(){
+    try{
+      const r=await fetch('/api/theme/personalize', {credentials:'same-origin'});
+      const j=await r.json();
+      if(j?.hex) document.documentElement.style.setProperty('--accent', j.hex);
+    }catch(e){}
+  })();
+
+  /* =====================
+     parallax (subtle)
+  ====================== */
+  (function parallax(){
+    const panel = $('#wheelPanel'); if(!panel) return;
+    let rx=0, ry=0, vx=0, vy=0;
+    const damp = prefersReduced? .18 : .08;
+    const update=()=>{
+      vx += (rx - vx)*damp; vy += (ry - vy)*damp;
+      panel.style.transform = `rotateX(${vy}deg) rotateY(${vx}deg)`;
+      requestAnimationFrame(update);
+    };
+    update();
+    panel.addEventListener('pointermove', e=>{
+      const r=panel.getBoundingClientRect();
+      const nx = (e.clientX - r.left)/r.width*2 - 1;
+      const ny = (e.clientY - r.top)/r.height*2 - 1;
+      rx = ny * 3.5; ry = -nx * 3.5;
+    });
+    panel.addEventListener('pointerleave', ()=>{ rx=0; ry=0; });
+  })();
+
+  /* =====================
+     Risk-driven Breathing
+  ====================== */
+  class BreathEngine {
+    constructor(){
+      this.rateHz = 0.10;  // ≈6 bpm baseline
+      this.amp    = 0.55;  // amplitude of breathing glow
+      this.sweep  = 0.12;  // specular sweep speed for the ring
+      this._rateTarget=this.rateHz; this._ampTarget=this.amp; this._sweepTarget=this.sweep;
+      this.val    = 0.7;
+    }
+    setFromRisk(risk, {confidence=1}={}){
+      risk = clamp01(risk||0); confidence = clamp01(confidence);
+      this._rateTarget = prefersReduced ? (0.05 + 0.03*risk) : (0.06 + 0.16*risk);     // 3.6–13.2 bpm
+      const baseAmp = prefersReduced ? (0.35 + 0.20*risk) : (0.35 + 0.55*risk);
+      this._ampTarget = baseAmp * (0.70 + 0.30*confidence);                              // damp if low confidence
+      this._sweepTarget = prefersReduced ? (0.06 + 0.06*risk) : (0.08 + 0.16*risk);
+    }
+    tick(){
+      const t = performance.now()/1000;
+      const k = prefersReduced ? 0.08 : 0.18;
+      this.rateHz += (this._rateTarget - this.rateHz)*k;
+      this.amp    += (this._ampTarget  - this.amp   )*k;
+      this.sweep  += (this._sweepTarget- this.sweep )*k;
+
+      const base  = 0.5 + 0.5 * Math.sin(2*Math.PI*this.rateHz * t);
+      const depth = 0.85 + 0.15 * Math.sin(2*Math.PI*this.rateHz * 0.5 * t);
+      const tremorAmt = prefersReduced ? 0 : (Math.max(0, current.harm - 0.75) * 0.02);
+      const tremor = tremorAmt * Math.sin(2*Math.PI*8 * t);
+      this.val = 0.55 + this.amp*(base*depth - 0.5) + tremor;
+
+      // push css knobs
+      document.documentElement.style.setProperty('--halo-alpha', (0.18 + 0.28*this.val).toFixed(3));
+      document.documentElement.style.setProperty('--halo-blur',  (0.60 + 0.80*this.val).toFixed(3));
+      document.documentElement.style.setProperty('--glow-mult',  (0.60 + 0.90*this.val).toFixed(3));
+      document.documentElement.style.setProperty('--sweep-speed', this.sweep.toFixed(3));
+    }
+  }
+  const breath = new BreathEngine();
+  (function loopBreath(){ breath.tick(); requestAnimationFrame(loopBreath); })();
+
+  /* =====================
+     Risk Wheel (2D canvas)
+  ====================== */
+  class RiskWheel {
+    constructor(canvas){
+      this.c = canvas; this.ctx = canvas.getContext('2d');
+      this.pixelRatio = Math.max(1, Math.min(2, devicePixelRatio||1));
+      this.value = 0.0; this.target=0.0; this.vel=0.0;
+      this.spring = prefersReduced ? 1.0 : 0.12;
+      new ResizeObserver(()=>this._resize()).observe(this.c);
+      this._resize();
+      this._tick = this._tick.bind(this); requestAnimationFrame(this._tick);
+    }
+    setTarget(x){ this.target = clamp01(x); }
+    _resize(){
+      const b = this.c.getBoundingClientRect();
+      const s = Math.min(b.width, b.height);
+      this.c.width = s * this.pixelRatio; this.c.height = s * this.pixelRatio;
+      this._draw();
+    }
+    _tick(){
+      const d = this.target - this.value;
+      this.vel = this.vel * 0.82 + d * this.spring;
+      this.value += this.vel;
+      this._draw();
+      requestAnimationFrame(this._tick);
+    }
+    _draw(){
+      const ctx=this.ctx, W=this.c.width, H=this.c.height;
+      ctx.clearRect(0,0,W,H);
+      const cx=W/2, cy=H/2, R=Math.min(W,H)*0.46, inner=R*0.62;
+
+      // base
+      ctx.save(); ctx.translate(cx,cy); ctx.rotate(-Math.PI/2);
+      ctx.lineWidth = (R-inner);
+
+      // track
+      ctx.strokeStyle='#ffffff16';
+      ctx.beginPath(); ctx.arc(0,0,(R+inner)/2, 0, Math.PI*2); ctx.stroke();
+
+      // fill
+      const p=clamp01(this.value), maxAng=p*Math.PI*2, segs=220;
+      for(let i=0;i<segs;i++){
+        const t0=i/segs; if(t0>=p) break;
+        const a0=t0*maxAng, a1=((i+1)/segs)*maxAng;
+        ctx.beginPath();
+        ctx.strokeStyle = this._colorAt(t0);
+        ctx.arc(0,0,(R+inner)/2, a0, a1);
+        ctx.stroke();
+      }
+
+      // spirit sweep (specular highlight), speed via --sweep-speed
+      const sp = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sweep-speed')) || (prefersReduced? .04 : .12);
+      const t = performance.now()/1000;
+      const sweepAng = (t * sp) % (Math.PI*2);
+      ctx.save();
+      ctx.rotate(sweepAng);
+      const dotR = Math.max(4*this.pixelRatio, (R-inner)*0.22);
+      const grad = ctx.createRadialGradient((R+inner)/2,0, 2, (R+inner)/2,0, dotR);
+      grad.addColorStop(0, 'rgba(255,255,255,.95)');
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = grad; ctx.beginPath();
+      ctx.arc((R+inner)/2,0, dotR, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+
+      ctx.restore();
+    }
+    _mix(h1,h2,k){
+      const a=parseInt(h1.slice(1),16), b=parseInt(h2.slice(1),16);
+      const r=(a>>16)&255, g=(a>>8)&255, bl=a&255;
+      const r2=(b>>16)&255, g2=(b>>8)&255, bl2=b&255;
+      const m=(x,y)=>Math.round(x+(y-x)*k);
+      return `#${m(r,r2).toString(16).padStart(2,'0')}${m(g,g2).toString(16).padStart(2,'0')}${m(bl,bl2).toString(16).padStart(2,'0')}`;
+    }
+    _colorAt(t){
+      const acc = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#49c2ff';
+      const green="#43d17a", amber="#f6c454", red="#ff6a6a";
+      const base = t<.4 ? this._mix(green, amber, t/.4) : this._mix(amber, red, (t-.4)/.6);
+      return this._mix(base, acc, 0.18);
+    }
+  }
+
+  /* =====================
+     Store + bindings
+  ====================== */
+  const wheel = new RiskWheel(document.getElementById('wheelCanvas'));
+  const hudNumber=$('#hudNumber'), hudLabel=$('#hudLabel'), hudNote=$('#hudNote');
+  const reasonsList=$('#reasonsList'), confidencePill=$('#confidencePill'), debugBox=$('#debugBox');
+  const btnGuess=$('#btnGuess'), btnRoute=$('#btnRoute'), btnHybrid=$('#btnHybrid');
+  const btnRefresh=$('#btnRefresh'), btnAuto=$('#btnAuto'), btnDebug=$('#btnDebug');
+  const routeForm=$('#routeForm'), lat=$('#lat'), lon=$('#lon'), dlat=$('#dlat'), dlon=$('#dlon'), btnRouteFetch=$('#btnRouteFetch');
+
+  const current = { mode:'guess', harm:0, last:null };
+
+  function setHUD(j){
+    const pct = Math.round(clamp01(j.harm_ratio||0)*100);
+    hudNumber.textContent = pct + "%";
+    hudLabel.textContent = (j.label||"").toUpperCase() || (pct<40?"CLEAR":pct<75?"CHANGING":"ELEVATED");
+    hudNote.textContent  = j.blurb || (pct<40?"Looks good ahead":"Stay adaptive and scan");
+    if (j.color){ document.documentElement.style.setProperty('--accent', j.color); }
+    confidencePill.textContent = "Conf: " + (j.confidence!=null ? Math.round(clamp01(j.confidence)*100) : "--") + "%";
+    reasonsList.innerHTML="";
+    (Array.isArray(j.reasons)? j.reasons.slice(0,8):["Model is composing context…"]).forEach(x=>{
+      const li=document.createElement('li'); li.textContent=x; reasonsList.appendChild(li);
+    });
+    if (btnDebug.getAttribute('aria-pressed')==='true'){
+      debugBox.textContent = JSON.stringify(j, null, 2);
+    }
+  }
+
+  function applyReading(j){
+    if(!j || typeof j.harm_ratio!=='number') return;
+    current.last=j; current.harm = clamp01(j.harm_ratio);
+    wheel.setTarget(current.harm);
+    breath.setFromRisk(current.harm, {confidence: j.confidence});
+    setHUD(j);
+  }
+
+  /* =====================
+     controls & modes
+  ====================== */
+  function toggleSeg(m){
+    current.mode=m;
+    btnGuess.setAttribute('aria-pressed', m==='guess'); btnGuess.setAttribute('aria-selected', m==='guess');
+    btnRoute.setAttribute('aria-pressed', m==='route'); btnRoute.setAttribute('aria-selected', m==='route');
+    btnHybrid.setAttribute('aria-pressed', m==='hybrid'); btnHybrid.setAttribute('aria-selected', m==='hybrid');
+    routeForm.style.display = (m!=='guess')? '' : 'none';
+    fetchOnce();
+  }
+  btnGuess.onclick = ()=>toggleSeg('guess');
+  btnRoute.onclick = ()=>toggleSeg('route');
+  btnHybrid.onclick= ()=>toggleSeg('hybrid');
+
+  btnRefresh.onclick = ()=>fetchOnce();
+  btnAuto.onclick = ()=>{
+    if(autoTimer){ stopAuto(); } else { startAuto(); }
+  };
+  btnDebug.onclick = ()=>{
+    const cur=btnDebug.getAttribute('aria-pressed')==='true';
+    btnDebug.setAttribute('aria-pressed', !cur);
+    btnDebug.textContent = "Debug: " + (!cur ? "On" : "Off");
+    debugBox.style.display = !cur ? '' : 'none';
+    if(!cur && current.last) debugBox.textContent = JSON.stringify(current.last,null,2);
+  };
+
+  btnRouteFetch.onclick = async (e)=>{ e.preventDefault(); await fetchRouteOnce(); };
+
+  let autoTimer=null;
+  function startAuto(){ stopAuto(); btnAuto.setAttribute('aria-pressed','true'); btnAuto.textContent="Auto: On"; fetchOnce(); autoTimer=setInterval(fetchOnce, 3600); }
+  function stopAuto(){ if(autoTimer) clearInterval(autoTimer); autoTimer=null; btnAuto.setAttribute('aria-pressed','false'); btnAuto.textContent="Auto: Off"; }
+
+  function isRouteFilled(){ return [lat.value,lon.value,dlat.value,dlon.value].every(v=>v && !isNaN(parseFloat(v))); }
+  function currentRoute(){ return { lat:parseFloat(lat.value), lon:parseFloat(lon.value), dest_lat:parseFloat(dlat.value), dest_lon:parseFloat(dlon.value) }; }
+
+  async function fetchOnce(){
+    if(current.mode==='guess') return fetchGuessOnce();
+    if(current.mode==='route') return fetchRouteOnce();
+    // hybrid: need both
+    if(isRouteFilled()){
+      const [g, r] = await Promise.allSettled([fetchJson('/api/risk/llm_guess'), postJson('/api/risk/llm_route', currentRoute())]);
+      const gj = g.status==='fulfilled'? g.value : null;
+      const rj = r.status==='fulfilled'? r.value : null;
+      const mix = blendReadings(gj, rj); applyReading(mix);
+    }else{
+      return fetchGuessOnce();
+    }
+  }
+
+  function blendReadings(a, b){
+    if(a && !b) return a; if(b && !a) return b; if(!a && !b) return null;
+    const ca = (a.confidence ?? 0.5), cb=(b.confidence ?? 0.5), tot = (ca+cb)||1;
+    const hr = ((a.harm_ratio??0)*ca + (b.harm_ratio??0)*cb)/tot;
+    const conf = Math.max(ca, cb)*0.9 + 0.05;
+    const reasons = [
+      ...(Array.isArray(a.reasons)? a.reasons.slice(0,3):[]),
+      ...(Array.isArray(b.reasons)? b.reasons.slice(0,3):[])
+    ];
+    const label = hr<.4?'clear':hr<.75?'changing':'elevated';
+    return { ...(b||a), harm_ratio: hr, confidence: conf, reasons, label };
+  }
+
+  async function fetchGuessOnce(){ const j = await fetchJson('/api/risk/llm_guess'); applyReading(j); }
+  async function fetchRouteOnce(){
+    if(!isRouteFilled()){ hudNote.textContent="Enter lat/lon + dest lat/lon."; return; }
+    const j = await postJson('/api/risk/llm_route', currentRoute()); applyReading(j);
+  }
+
+  async function fetchJson(url){ try{ const r=await fetch(url, {credentials:'same-origin'}); return await r.json(); }catch(e){ return null; } }
+  async function postJson(url, body){
+    try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)}); return await r.json(); }catch(e){ return null; }
+  }
+
+  // Optional SSE (if you expose /api/risk/stream)
+  (function trySSE(){
+    if(!('EventSource' in window)) return;
+    try{
+      const es = new EventSource('/api/risk/stream');
+      es.onmessage = ev=>{ try{ const j=JSON.parse(ev.data); applyReading(j); }catch(_){} };
+      es.onerror = ()=>{ es.close(); };
+    }catch(e){}
+  })();
+
+  // Boot
+  toggleSeg('guess'); startAuto();
+  </script>
 </body>
 </html>
-    """)
-    
+    """, seed_hex=seed_hex, seed_code=seed_code)
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     error_message = ""
