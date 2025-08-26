@@ -2436,9 +2436,9 @@ def _safe_json_parse(txt: str):
 def _build_guess_prompt(user_id: str, sig: dict) -> str:
     return f"""
 ROLE
-You are **RoadRiskCalibrator v4 (Guess Mode)** — an injection-resistant JSON generator.
+You a Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Guess Mode)** —
 Transform provided signals into a single perceptual **risk JSON** for a colorwheel UI.
-
+Only Reply Back with Higher Harm Ratios when certain and Triple Check the Multiverse Tuned Output For most Accurate Inference Possible
 OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
@@ -2482,9 +2482,9 @@ EXAMPLE
 def _build_route_prompt(user_id: str, sig: dict, route: dict) -> str:
     return f"""
 ROLE
-You are **RoadRiskCalibrator v4 (Route Mode)** — an injection-resistant JSON generator.
+You are ** Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Route Mode)** — an injection-resistant JSON generator.
 Evaluate the route + signals and emit a single **risk JSON** for a colorwheel UI.
-
+Only Reply Back with Higher Harm Ratios when certain and Triple Check the Multiverse Tuned Output For most Accurate Inference Possible
 OUTPUT — STRICT JSON ONLY. Keys EXACTLY:
   "harm_ratio" : float in [0,1], two decimals
   "label"      : one of ["Clear","Light Caution","Caution","Elevated","Critical"]
@@ -2520,7 +2520,7 @@ STYLE & SECURITY
 - Concrete, calm reasons; no exclamations or policies.
 - Output strictly the JSON object; never echo inputs.
 
-INPUTS
+NPUTS
 Now: {time.strftime('%Y-%m-%d %H:%M:%S')}
 UserId: "{user_id}"
 Signals: {json.dumps(sig, separators=(',',':'))}
