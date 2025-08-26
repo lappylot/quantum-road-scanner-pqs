@@ -2634,14 +2634,6 @@ def api_theme_personalize():
     seed = colorsync.sample(uid)
     return jsonify({"hex": seed.get("hex", "#49c2ff"), "code": seed.get("qid25",{}).get("code","B2")})
 
-@app.route("/api/risk/llm_guess", methods=["GET"])
-def api_llm_guess():
-    uid = _user_id()
-    sig = _system_signals(uid)
-    prompt = _build_guess_prompt(uid, sig)
-    data = _call_llm(prompt) or _fallback_score(sig)
-    data["server_enriched"] = {"ts": datetime.utcnow().isoformat()+"Z","mode":"guess","sig": sig}
-    return _attach_cookie(jsonify(data))
 
 @app.route("/api/risk/llm_route", methods=["POST"])
 def api_llm_route():
@@ -2660,6 +2652,7 @@ def api_llm_route():
     data = _call_llm(prompt) or _fallback_score(sig, route)
     data["server_enriched"] = {"ts": datetime.utcnow().isoformat()+"Z","mode":"route","sig": sig,"route": route}
     return _attach_cookie(jsonify(data))
+    
 @app.route("/api/risk/stream")
 def api_stream():
     # capture anything that touches `request`/`session` BEFORE streaming
