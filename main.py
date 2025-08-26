@@ -1846,7 +1846,11 @@ def quantum_hazard_scan(cpu_usage, ram_usage):
 
 registration_enabled = True
 
-
+try:
+    quantum_hazard_scan  # type: ignore[name-defined]
+except NameError:
+    quantum_hazard_scan = None  # fallback when module not present
+    
 def create_tables():
     if not DB_FILE.exists():
         DB_FILE.touch(mode=0o600)
