@@ -2168,27 +2168,17 @@ with app.app_context():
 
 
 def is_registration_enabled():
-    with config_lock:
-        with sqlite3.connect(DB_FILE) as db:
-            cursor = db.cursor()
-            cursor.execute(
-                "SELECT value FROM config WHERE key = 'registration_enabled'")
-            row = cursor.fetchone()
-            enabled = row and row[0] == '1'
-            logger.debug(f"Registration enabled: {enabled}")
-            return enabled
+    val = os.getenv('REGISTRATION_ENABLED', 'false')
+    enabled = str(val).strip().lower() in ('1', 'true', 'yes', 'on')
+    logger.debug(f"[ENV] Registration enabled: {enabled} (REGISTRATION_ENABLED={val!r})")
+    return enabled
 
 
 def set_registration_enabled(enabled: bool, admin_user_id: int):
-    with config_lock:
-        with sqlite3.connect(DB_FILE) as db:
-            cursor = db.cursor()
-            cursor.execute("REPLACE INTO config (key, value) VALUES (?, ?)",
-                           ('registration_enabled', '1' if enabled else '0'))
-            db.commit()
-            logger.debug(
-                f"Admin user_id {admin_user_id} set registration_enabled to {enabled}."
-            )
+    os.environ['REGISTRATION_ENABLED'] = 'true' if enabled else 'false'
+    logger.debug(
+        f"[ENV] Admin user_id {admin_user_id} set REGISTRATION_ENABLED={os.environ['REGISTRATION_ENABLED']}"
+    )
 
 
 def create_database_connection():
@@ -4574,35 +4564,42 @@ def register():
 </html>
     """, form=form, error_message=error_message, registration_enabled=registration_enabled)
 
-
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
+    # Registration status is READ FROM ENV ONLY (REGISTRATION_ENABLED).
+    # Invite codes remain DB-backed (generate/list unchanged).
+
+    import os  # local import to keep this block self-contained
+
     if 'is_admin' not in session or not session.get('is_admin'):
         return redirect(url_for('dashboard'))
 
-    global registration_enabled
     message = ""
     new_invite_code = None
     form = SettingsForm()
+
+    # Read current registration status from environment
+    def _read_registration_from_env():
+        val = os.getenv('REGISTRATION_ENABLED', 'false')
+        return (val, str(val).strip().lower() in ('1', 'true', 'yes', 'on'))
+
+    env_val, registration_enabled = _read_registration_from_env()
+
     if request.method == 'POST':
         action = request.form.get('action')
-        if action == 'enable_registration':
-            registration_enabled = True
-            set_registration_enabled(True, get_user_id(session['username']))
-            message = "Registration has been enabled."
-        elif action == 'disable_registration':
-            registration_enabled = False
-            set_registration_enabled(False, get_user_id(session['username']))
-            message = "Registration has been disabled."
-        elif action == 'generate_invite_code':
+        if action == 'generate_invite_code':
             new_invite_code = generate_secure_invite_code()
             with sqlite3.connect(DB_FILE) as db:
                 cursor = db.cursor()
                 cursor.execute("INSERT INTO invite_codes (code) VALUES (?)",
-                               (new_invite_code, ))
+                               (new_invite_code,))
                 db.commit()
             message = f"New invite code generated: {new_invite_code}"
 
+        # Re-read env in case it changed between requests (no persistence done here)
+        env_val, registration_enabled = _read_registration_from_env()
+
+    # Unused invite codes remain DB-backed
     invite_codes = []
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
@@ -4625,99 +4622,25 @@ def settings():
     <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
           integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
     <style>
-        body {
-            background-color: #121212;
-            color: #ffffff;
-            font-family: 'Roboto', sans-serif;
-        }
-        .sidebar {
-            position: fixed; 
-            top: 0; 
-            left: 0; 
-            height: 100%; 
-            width: 220px;
-            background-color: #1f1f1f;
-            padding-top: 60px;
-            border-right: 1px solid #333;
-            transition: width 0.3s;
-        }
-        .sidebar a {
-            color: #bbbbbb; 
-            padding: 15px 20px; 
-            text-decoration: none; 
-            display: block; 
-            font-size: 1rem;
-            transition: background-color 0.3s, color 0.3s;
-        }
-        .sidebar a:hover, .sidebar a.active {
-            background-color: #333;
-            color: #ffffff;
-        }
-        .content {
-            margin-left: 220px; 
-            padding: 20px;
-            transition: margin-left 0.3s;
-        }
-        .navbar-brand {
-            font-size: 1.5rem; 
-            color: #ffffff; 
-            text-align: center; 
-            display: block; 
-            margin-bottom: 20px;
-            font-family: 'Orbitron', sans-serif;
-        }
-        .card {
-            padding: 30px; 
-            background-color: rgba(255, 255, 255, 0.1); 
-            border: none; 
-            border-radius: 15px; 
-        }
-        .message { color: #4dff4d; }
-        .btn { 
-            color: #ffffff; 
-            font-weight: bold;
-            transition: background-color 0.3s, border-color 0.3s;
-        }
-        .btn-success { 
-            background-color: #00cc00; 
-            border-color: #00cc00; 
-        }
-        .btn-success:hover { 
-            background-color: #33ff33; 
-            border-color: #33ff33; 
-        }
-        .btn-danger { 
-            background-color: #cc0000; 
-            border-color: #cc0000; 
-        }
-        .btn-danger:hover { 
-            background-color: #ff3333; 
-            border-color: #ff3333; 
-        }
-        .btn-primary { 
-            background-color: #007bff; 
-            border-color: #007bff; 
-        }
-        .btn-primary:hover { 
-            background-color: #0056b3; 
-            border-color: #0056b3; 
-        }
-        .invite-codes {
-            margin-top: 20px;
-        }
-        .invite-code {
-            background-color: #2c2c2c;
-            padding: 10px;
-            border-radius: 5px;
-            margin-bottom: 5px;
-            font-family: 'Courier New', Courier, monospace;
-        }
-        @media (max-width: 768px) {
-            .sidebar { width: 60px; }
-            .sidebar a { padding: 15px 10px; text-align: center; }
-            .sidebar a span { display: none; }
-            .content { margin-left: 60px; }
-        }
+        body { background:#121212; color:#fff; font-family:'Roboto',sans-serif; }
+        .sidebar { position:fixed; top:0; left:0; height:100%; width:220px; background:#1f1f1f; padding-top:60px; border-right:1px solid #333; transition:width .3s; }
+        .sidebar a { color:#bbb; padding:15px 20px; text-decoration:none; display:block; font-size:1rem; transition:background-color .3s, color .3s; }
+        .sidebar a:hover, .sidebar a.active { background:#333; color:#fff; }
+        .content { margin-left:220px; padding:20px; transition:margin-left .3s; }
+        .navbar-brand { font-size:1.5rem; color:#fff; text-align:center; display:block; margin-bottom:20px; font-family:'Orbitron',sans-serif; }
+        .card { padding:30px; background:rgba(255,255,255,.1); border:none; border-radius:15px; }
+        .message { color:#4dff4d; }
+        .status { margin:10px 0 20px; }
+        .badge { display:inline-block; padding:.35em .6em; border-radius:.35rem; font-weight:bold; }
+        .badge-ok { background:#00cc00; color:#000; }
+        .badge-off { background:#cc0000; color:#fff; }
+        .alert-info { background:#0d6efd22; border:1px solid #0d6efd66; color:#cfe2ff; padding:10px 12px; border-radius:8px; }
+        .btn { color:#fff; font-weight:bold; transition:background-color .3s, border-color .3s; }
+        .btn-primary { background:#007bff; border-color:#007bff; }
+        .btn-primary:hover { background:#0056b3; border-color:#0056b3; }
+        .invite-codes { margin-top:20px; }
+        .invite-code { background:#2c2c2c; padding:10px; border-radius:5px; margin-bottom:5px; font-family:'Courier New', Courier, monospace; }
+        @media (max-width:768px){ .sidebar{width:60px;} .sidebar a{padding:15px 10px; text-align:center;} .sidebar a span{display:none;} .content{margin-left:60px;} }
     </style>
 </head>
 <body>
@@ -4740,32 +4663,47 @@ def settings():
     <div class="content">
         <h2>Settings</h2>
 
+        <div class="status">
+            <strong>Current registration:</strong>
+            {% if registration_enabled %}
+                <span class="badge badge-ok">ENABLED</span>
+            {% else %}
+                <span class="badge badge-off">DISABLED</span>
+            {% endif %}
+            <small style="opacity:.8;">(from ENV: REGISTRATION_ENABLED={{ registration_env_value }})</small>
+        </div>
+
+        <div class="alert-info">
+            Registration is controlled via environment only. Set <code>REGISTRATION_ENABLED=true</code> or <code>false</code> and restart the app.
+        </div>
+
         {% if message %}
             <p class="message">{{ message }}</p>
         {% endif %}
-        <form method="POST">
-            {{ form.hidden_tag() }}
-            <button type="submit" name="action" value="enable_registration" class="btn btn-success">Enable Registration</button>
-            <button type="submit" name="action" value="disable_registration" class="btn btn-danger">Disable Registration</button>
-        </form>
+
         <hr>
+
         <form method="POST">
             {{ form.hidden_tag() }}
             <button type="submit" name="action" value="generate_invite_code" class="btn btn-primary">Generate New Invite Code</button>
         </form>
+
         {% if new_invite_code %}
             <p>New Invite Code: {{ new_invite_code }}</p>
         {% endif %}
+
         <hr>
+
         <h4>Unused Invite Codes:</h4>
-        <ul>
+        <ul class="invite-codes">
         {% for code in invite_codes %}
-            <li>{{ code }}</li>
+            <li class="invite-code">{{ code }}</li>
         {% else %}
             <p>No unused invite codes available.</p>
         {% endfor %}
         </ul>
     </div>
+
     <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
             integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
     <script src="{{ url_for('static', filename='js/popper.min.js') }}" integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
@@ -4775,10 +4713,13 @@ def settings():
 </body>
 </html>
     """,
-                                  message=message,
-                                  new_invite_code=new_invite_code,
-                                  invite_codes=invite_codes,
-                                  form=form)
+        message=message,
+        new_invite_code=new_invite_code,
+        invite_codes=invite_codes,
+        form=form,
+        registration_enabled=registration_enabled,
+        registration_env_value=env_val)
+
 
 
 @app.route('/logout')
