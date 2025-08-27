@@ -5830,7 +5830,7 @@ async def reverse_geocode_route():
 
     try:
         street_name = await fetch_street_name_llm(lat, lon)
-        logger.DEBUG(f"Successfully resolved street name using LLM: {street_name}")
+        logger.debug(f"Successfully resolved street name using LLM: {street_name}")
         return jsonify({"street_name": street_name}), 200
     except Exception as e:
         logger.warning(
@@ -5840,7 +5840,7 @@ async def reverse_geocode_route():
 
         try:
             street_name = reverse_geocode(lat, lon, cities)
-            logger.DEBUG(f"Successfully resolved street name using fallback method: {street_name}")
+            logger.debug(f"Successfully resolved street name using fallback method: {street_name}")
             return jsonify({"street_name": street_name}), 200
         except Exception as fallback_e:
             logger.exception(
