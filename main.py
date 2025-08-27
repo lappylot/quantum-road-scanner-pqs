@@ -3678,7 +3678,6 @@ class ReportForm(FlaskForm):
 @app.route('/')
 def index():
     return redirect(url_for('home'))
-
 @app.route('/home')
 def home():
     # Optional: seed the user-specific accent so first paint is personalized.
@@ -3692,6 +3691,7 @@ def home():
   <meta charset="UTF-8" />
   <title>Quantum Road Scanner — Home+</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
 
   <!-- Fonts & CSS (SRI) -->
   <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
@@ -3725,8 +3725,14 @@ def home():
       -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
       overflow-x:hidden;
     }
+    @supports not (color: color-mix(in oklab, #fff 50%, #000)) {
+      body{ background:
+        radial-gradient(900px 500px at 10% -20%, rgba(73,194,255,.10), #0b0f17 58%),
+        radial-gradient(1000px 700px at 120% -20%, rgba(73,194,255,.14), transparent 62%),
+        linear-gradient(135deg, #0b0f17, #0d1423 45%, #0b0f17);
+      }
+    }
 
-    /* Soft nebula */
     .nebula{
       position:fixed; inset:-12vh -12vw; pointer-events:none; z-index:-1;
       background:
@@ -3746,13 +3752,13 @@ def home():
     }
     .navbar-brand{ font-family:'Orbitron',sans-serif; letter-spacing:.5px; }
 
-    /* Hero card */
     .hero{
       position:relative; border-radius:calc(var(--radius) + 10px);
       background: color-mix(in oklab, var(--glass) 96%, transparent);
       border: 1px solid var(--stroke);
       box-shadow: var(--shadow-lg);
       overflow:hidden;
+      content-visibility:auto; contain-intrinsic-size: 600px 400px;
     }
     .hero::after{
       content:""; position:absolute; inset:-35%;
@@ -3774,9 +3780,9 @@ def home():
     .card-g{
       background: color-mix(in oklab, var(--glass) 94%, transparent);
       border:1px solid var(--stroke); border-radius: var(--radius); box-shadow: var(--shadow-lg);
+      content-visibility:auto; contain-intrinsic-size: 800px 400px;
     }
 
-    /* Wheel layout */
     .wheel-wrap{ display:grid; grid-template-columns: minmax(320px,1.1fr) minmax(320px,1fr); gap:26px; align-items:stretch }
     @media(max-width: 992px){ .wheel-wrap{ grid-template-columns: 1fr } }
 
@@ -3785,17 +3791,16 @@ def home():
       background: linear-gradient(180deg, #ffffff10, #0000001c);
       border:1px solid var(--stroke); overflow:hidden; box-shadow: var(--shadow-lg);
       perspective: 1500px; transform-style: preserve-3d;
-
-      /* 🔧 make sure the container has height so the canvas can size */
       aspect-ratio: 1 / 1;
       min-height: clamp(300px, 42vw, 520px);
+      will-change: transform;
+      contain: paint layout;
+      transform: translateZ(0);
     }
     .wheel-hud{ position:absolute; inset:14px; border-radius:inherit; display:grid; place-items:center; }
     canvas#wheelCanvas{ width:100%; height:100%; display:block; }
 
-    .wheel-halo{
-      position:absolute; inset:0; display:grid; place-items:center; pointer-events:none;
-    }
+    .wheel-halo{ position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; }
     .wheel-halo .halo{
       width:min(70%, 420px); aspect-ratio:1; border-radius:50%;
       filter: blur(calc(30px * var(--halo-blur, .9))) saturate(112%);
@@ -3869,19 +3874,18 @@ def home():
     <section class="hero p-4 p-md-5 mb-4">
       <div class="row align-items-center">
         <div class="col-lg-7">
-          <h1 class="hero-title display-5">Risk Colorwheel — Perceptual, Personal, Live</h1>
+          <h1 class="hero-title display-5">Road Risk Wheel — simple, personal, live</h1>
           <p class="lead-soft mt-3">
-            Meet your <strong>LLM-guided dial</strong>. The wheel blends many signals into a single reading:
-            a smooth <em>harm ratio</em> from tranquil green → amber drift → alert crimson. In <em>Guess</em> mode,
-            the server (via <code>psutil</code>) samples CPU/RAM & jitter entropy as context; in <em>Route</em> mode,
-            you add coordinates so the model can reason about the trip. The wheel’s <strong>breathing</strong>
-            changes with risk—slower & softer when clear, deeper & brisk when elevated.
+            Think of this as a <strong>mood ring for your route</strong>. We turn lots of little signals into
+            one clear reading. Green means you can relax. Amber asks you to pay attention. Red says take care.
+            You can do a quick check with no destination, or add a trip to look ahead. The glow “breathes”
+            gently—slower when things look calm, quicker when they don’t.
           </p>
           <div class="d-flex flex-wrap align-items-center mt-3" style="gap:.6rem">
             <a class="btn cta" href="{{ url_for('dashboard') }}">Open Dashboard</a>
-            <span class="pill">Your tone: {{ seed_code }}</span>
-            <span class="pill">Strict-JSON LLM</span>
-            <span class="pill">PSUTIL signals</span>
+            <span class="pill">Tone: {{ seed_code }}</span>
+            <span class="pill">Private by default</span>
+            <span class="pill">Adaptive glow</span>
           </div>
         </div>
         <div class="col-lg-5 mt-4 mt-lg-0">
@@ -3893,13 +3897,13 @@ def home():
                 <div class="hud-ring"></div>
                 <div class="text-center">
                   <div class="hud-number" id="hudNumber">--%</div>
-                  <div class="hud-label" id="hudLabel">INITIALIZING</div>
-                  <div class="hud-note" id="hudNote">Calibrating renderer…</div>
+                  <div class="hud-label" id="hudLabel">WARMING UP</div>
+                  <div class="hud-note" id="hudNote">Getting things ready…</div>
                 </div>
               </div>
             </div>
           </div>
-          <p class="meta mt-2">Tip: if your OS has “Reduce Motion”, animations automatically calm down.</p>
+          <p class="meta mt-2">Tip: if your phone has “Reduce Motion” on, animations slow down automatically.</p>
         </div>
       </div>
     </section>
@@ -3908,21 +3912,21 @@ def home():
     <section class="card-g p-4 p-md-5 mb-4">
       <div class="wheel-wrap">
         <div>
-          <h3 class="mb-2">How it decides</h3>
+          <h3 class="mb-2">How it works</h3>
           <p class="meta">
-            We call the LLM in two ways and always require strict JSON back. A lightweight worker smooths noise,
-            and the wheel renders a perceptual color ramp with a risk-linked breathing halo and ring glow.
+            We look at a few live signals and, if you share a route, we also think about the road ahead.
+            Everything is blended into one easy score and a smooth color ring.
           </p>
           <ul class="list-clean">
-            <li><strong>LLM Guess</strong> — server bundles <code>psutil</code> CPU %, RAM %, loadavg, and a tiny entropy sketch; no destination.</li>
-            <li><strong>LLM Route</strong> — includes <code>lat/lon → dest_lat/dest_lon</code> so the LLM can reason about the segment you care about.</li>
+            <li><strong>Quick Check</strong> — a fast pulse using your device. No destination needed.</li>
+            <li><strong>Trip Check</strong> — add start and destination so we can preview that stretch.</li>
           </ul>
           <div class="d-flex flex-wrap align-items-center mt-3" style="gap:.7rem">
-            <span class="pill">Source</span>
-            <div class="seg" role="tablist" aria-label="Risk source">
-              <button id="btnGuess" role="tab" aria-selected="true" aria-pressed="true" title="No destination; PSUTIL pulse only">LLM Guess</button>
-              <button id="btnRoute" role="tab" aria-selected="false" aria-pressed="false">LLM Route</button>
-              <button id="btnHybrid" role="tab" aria-selected="false" aria-pressed="false" title="Blend Guess+Route if both available">Hybrid</button>
+            <span class="pill">Mode</span>
+            <div class="seg" role="tablist" aria-label="Reading mode">
+              <button id="btnGuess" role="tab" aria-selected="true" aria-pressed="true" title="Fast check with no destination">Quick Check</button>
+              <button id="btnRoute" role="tab" aria-selected="false" aria-pressed="false" title="Use start and destination to look ahead">Trip Check</button>
+              <button id="btnHybrid" role="tab" aria-selected="false" aria-pressed="false" title="Blend Quick + Trip if both are available">Both</button>
             </div>
             <button id="btnRefresh" class="btn btn-sm btn-outline-light">Refresh</button>
             <button id="btnAuto" class="btn btn-sm btn-outline-light" aria-pressed="true">Auto: On</button>
@@ -3931,11 +3935,11 @@ def home():
 
           <form id="routeForm" class="mt-3" style="display:none">
             <div class="d-flex flex-wrap" style="gap:.5rem">
-              <input id="lat" class="form-control form-control-sm" style="width:140px" placeholder="lat">
-              <input id="lon" class="form-control form-control-sm" style="width:140px" placeholder="lon">
-              <input id="dlat" class="form-control form-control-sm" style="width:140px" placeholder="dest lat">
-              <input id="dlon" class="form-control form-control-sm" style="width:140px" placeholder="dest lon">
-              <button id="btnRouteFetch" class="btn btn-sm btn-light">Fetch Route Risk</button>
+              <input id="lat" class="form-control form-control-sm" style="width:140px" placeholder="start lat" inputmode="decimal" autocomplete="off">
+              <input id="lon" class="form-control form-control-sm" style="width:140px" placeholder="start lon" inputmode="decimal" autocomplete="off">
+              <input id="dlat" class="form-control form-control-sm" style="width:140px" placeholder="dest lat" inputmode="decimal" autocomplete="off">
+              <input id="dlon" class="form-control form-control-sm" style="width:140px" placeholder="dest lon" inputmode="decimal" autocomplete="off">
+              <button id="btnRouteFetch" class="btn btn-sm btn-light">Run Trip Check</button>
             </div>
           </form>
         </div>
@@ -3943,11 +3947,11 @@ def home():
         <div>
           <div class="card-g p-3">
             <div class="d-flex justify-content-between align-items-center">
-              <strong>Why this reading</strong>
+              <strong>Why this score</strong>
               <span class="pill" id="confidencePill" title="Model confidence">Conf: --%</span>
             </div>
             <ul class="list-clean mt-2" id="reasonsList">
-              <li>Waiting for LLM response…</li>
+              <li>Waiting for the reading…</li>
             </ul>
             <div id="debugBox" class="debug mt-3" style="display:none">debug…</div>
           </div>
@@ -3959,36 +3963,43 @@ def home():
     <section class="card-g p-4 p-md-5">
       <div class="row g-4">
         <div class="col-md-4">
-          <h5>Perceptual ramp</h5>
-          <p class="meta">Colors blend in OK-ish space so equal changes feel equal. We also tint ~18% toward your accent for subtle identity.</p>
+          <h5>Colors you can trust</h5>
+          <p class="meta">The ring changes smoothly so small shifts feel small and big shifts feel big. We tint it a little toward your chosen color for a personal touch.</p>
         </div>
         <div class="col-md-4">
-          <h5>Breathing & calm tech</h5>
-          <p class="meta">The halo’s breath rate and amplitude follow risk & confidence. Clear → slower and softer; elevated → quicker and fuller.</p>
+          <h5>Breathing glow</h5>
+          <p class="meta">The halo “breathes” with the score—slower and softer when things look calm, quicker and brighter when risk rises.</p>
         </div>
         <div class="col-md-4">
-          <h5>Privacy by design</h5>
-          <p class="meta">Guess mode never sends a destination. Route mode only sends the numbers you provide. Accent hue is local, not uploaded.</p>
+          <h5>Your data, your choice</h5>
+          <p class="meta">Quick Check keeps things on your device. Trip Check only uses the numbers you enter. Your accent color stays on your device too.</p>
         </div>
       </div>
     </section>
   </main>
 
-  <!-- JS (SRI) -->
+  <!-- JS (SRI + defer) -->
   <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
-          integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+          integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous" defer></script>
   <script src="{{ url_for('static', filename='js/popper.min.js') }}"
-          integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
+          integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous" defer></script>
   <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
-          integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+          integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous" defer></script>
 
   <script>
   /* =====================
-     micro utils & theming
+     micro utils & environment
   ====================== */
   const $ = (s, el=document)=>el.querySelector(s);
   const clamp01 = x => Math.max(0, Math.min(1, x));
   const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const hasHover = matchMedia('(hover: hover)').matches;
+
+  const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  const saveData = !!(conn && conn.saveData);
+  const netSlow = !!(conn && /(^|-)2g/.test(conn.effectiveType||''));
+  const isLowCore = navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4;
+  const isLowEnd = prefersReduced || saveData || netSlow || isLowCore;
 
   // enforce update cadence
   const MIN_UPDATE_MS = 60 * 1000; // 🔒 only change once per minute
@@ -3999,21 +4010,17 @@ def home():
 
   (async function themeSync(){
     try{
-      const r=await fetch('/api/theme/personalize', {credentials:'same-origin'});
+      const r=await fetch('/api/theme/personalize', {credentials:'same-origin', cache:'no-store'});
       const j=await r.json();
       if(j?.hex) document.documentElement.style.setProperty('--accent', j.hex);
     }catch(e){}
   })();
 
-  /* =====================
-     ensure wheel has height (CSS fallback for older engines)
-  ====================== */
   (function ensureWheelSize(){
     const panel = document.getElementById('wheelPanel');
     if(!panel) return;
     function fit(){
       const w = panel.clientWidth || panel.offsetWidth || 0;
-      // only force height if the computed height is tiny (aspect-ratio unsupported or broken)
       const ch = parseFloat(getComputedStyle(panel).height) || 0;
       if (ch < 24 && w > 0) panel.style.height = w + 'px';
     }
@@ -4022,29 +4029,30 @@ def home():
   })();
 
   /* =====================
-     parallax (subtle)
+     Perf-friendly parallax (hover devices only)
   ====================== */
-  (function parallax(){
-    const panel = $('#wheelPanel'); if(!panel) return;
-    let rx=0, ry=0, vx=0, vy=0;
-    const damp = prefersReduced? .18 : .08;
-    const update=()=>{
-      vx += (rx - vx)*damp; vy += (ry - vy)*damp;
-      panel.style.transform = `rotateX(${vy}deg) rotateY(${vx}deg)`;
-      requestAnimationFrame(update);
-    };
-    update();
+  let parallaxDirty = false, px=0, py=0, tx=0, ty=0;
+  (function parallaxSetup(){
+    const panel = $('#wheelPanel'); if(!panel || !hasHover) return;
     panel.addEventListener('pointermove', e=>{
       const r=panel.getBoundingClientRect();
       const nx = (e.clientX - r.left)/r.width*2 - 1;
       const ny = (e.clientY - r.top)/r.height*2 - 1;
-      rx = ny * 3.5; ry = -nx * 3.5;
-    });
-    panel.addEventListener('pointerleave', ()=>{ rx=0; ry=0; });
+      tx = -nx * 3.5; ty = ny * 3.5; parallaxDirty = true;
+    }, {passive:true});
+    panel.addEventListener('pointerleave', ()=>{ tx=0; ty=0; parallaxDirty = true; }, {passive:true});
   })();
+  function applyParallax(){
+    if (!parallaxDirty) return;
+    const damp = prefersReduced ? .18 : .08;
+    px += (tx - px)*damp; py += (ty - py)*damp;
+    const pnl = $('#wheelPanel');
+    if (pnl) pnl.style.transform = `rotateX(${py}deg) rotateY(${px}deg)`;
+    if (Math.abs(tx-px) < .05 && Math.abs(ty-py) < .05) parallaxDirty = false;
+  }
 
   /* =====================
-     Risk-driven Breathing
+     Risk-driven Breathing (batched CSS updates)
   ====================== */
   class BreathEngine {
     constructor(){
@@ -4053,13 +4061,14 @@ def home():
       this.sweep  = 0.12;
       this._rateTarget=this.rateHz; this._ampTarget=this.amp; this._sweepTarget=this.sweep;
       this.val    = 0.7;
+      this._lastCSS = null;
     }
     setFromRisk(risk, {confidence=1}={}){
       risk = clamp01(risk||0); confidence = clamp01(confidence);
       this._rateTarget = prefersReduced ? (0.05 + 0.03*risk) : (0.06 + 0.16*risk);
       const baseAmp = prefersReduced ? (0.35 + 0.20*risk) : (0.35 + 0.55*risk);
       this._ampTarget = baseAmp * (0.70 + 0.30*confidence);
-      this._sweepTarget = prefersReduced ? (0.06 + 0.06*risk) : (0.08 + 0.16*risk);
+      this._sweepTarget = (prefersReduced || saveData) ? (0.05 + 0.06*risk) : (0.08 + 0.16*risk);
     }
     tick(){
       const t = performance.now()/1000;
@@ -4074,50 +4083,75 @@ def home():
       const tremor = tremorAmt * Math.sin(2*Math.PI*8 * t);
       this.val = 0.55 + this.amp*(base*depth - 0.5) + tremor;
 
-      document.documentElement.style.setProperty('--halo-alpha', (0.18 + 0.28*this.val).toFixed(3));
-      document.documentElement.style.setProperty('--halo-blur',  (0.60 + 0.80*this.val).toFixed(3));
-      document.documentElement.style.setProperty('--glow-mult',  (0.60 + 0.90*this.val).toFixed(3));
-      document.documentElement.style.setProperty('--sweep-speed', this.sweep.toFixed(3));
+      const a = +(0.18 + 0.28*this.val).toFixed(3);
+      const b = +(0.60 + 0.80*this.val).toFixed(3);
+      const g = +(0.60 + 0.90*this.val).toFixed(3);
+      const s = +this.sweep.toFixed(3);
+      const L = this._lastCSS;
+      if (L && Math.abs(a-L.a)<0.002 && Math.abs(b-L.b)<0.002 &&
+              Math.abs(g-L.g)<0.002 && Math.abs(s-L.s)<0.002) return;
+
+      const root = document.documentElement.style;
+      root.setProperty('--halo-alpha', a);
+      root.setProperty('--halo-blur',  b);
+      root.setProperty('--glow-mult',  g);
+      root.setProperty('--sweep-speed', s);
+      this._lastCSS = {a,b,g,s};
     }
   }
   const breath = new BreathEngine();
-  (function loopBreath(){ breath.tick(); requestAnimationFrame(loopBreath); })();
 
   /* =====================
-     Risk Wheel (2D canvas)
+     Risk Wheel (2D canvas) — adaptive & guarded
   ====================== */
+  let disableSweep = saveData || netSlow;
+
   class RiskWheel {
     constructor(canvas){
       this.c = canvas; this.ctx = canvas.getContext('2d');
-      this.pixelRatio = Math.max(1, Math.min(2, devicePixelRatio||1));
+      this.basePR = Math.min(2, window.devicePixelRatio || 1);
+      this.pixelRatio = isLowEnd ? 1 : this.basePR;
       this.value = 0.0; this.target=0.0; this.vel=0.0;
       this.spring = prefersReduced ? 1.0 : 0.12;
-      this._resize = this._resize.bind(this);
-      new ResizeObserver(this._resize).observe(this.c);
-      // also observe the panel so height/width changes trigger draws
+      this._lastDraw = {value:-1, w:0, h:0};
+      this._dot = null;
+      this._quality = 0;
+
       const panel = document.getElementById('wheelPanel');
-      if (panel) new ResizeObserver(this._resize).observe(panel);
-      this._resize();
-      this._tick = this._tick.bind(this); requestAnimationFrame(this._tick);
+      this._resizeFrom = this._resizeFrom.bind(this);
+      if (panel) new ResizeObserver(this._resizeFrom).observe(panel);
+      this._resizeFrom(panel || this.c);
     }
     setTarget(x){ this.target = clamp01(x); }
-    _resize(){
-      // robust sizing even if height reports as 0
-      const panel = document.getElementById('wheelPanel');
-      const rect = (panel||this.c).getBoundingClientRect();
-      let w = rect.width||0, h = rect.height||0;
-      if (h < 2) h = w; // fall back to square if collapsed height
-      const s = Math.max(1, Math.min(w, h));
-      const px = this.pixelRatio;
-      this.c.width = s * px; this.c.height = s * px;
-      this._draw();
+    setQuality(level){
+      this._quality = Math.max(0, Math.min(2, level|0));
+      const pr = Math.max(0.75, Math.min(2, (isLowEnd?1:this.basePR) - this._quality*0.4));
+      if (pr !== this.pixelRatio){ this.pixelRatio = pr; this._resizeFrom(document.getElementById('wheelPanel') || this.c); }
     }
-    _tick(){
+    tick(){
       const d = this.target - this.value;
       this.vel = this.vel * 0.82 + d * this.spring;
       this.value += this.vel;
-      this._draw();
-      requestAnimationFrame(this._tick);
+
+      const w=this.c.width, h=this.c.height;
+      if (Math.abs(this.value - this._lastDraw.value) > 0.003 || w!==this._lastDraw.w || h!==this._lastDraw.h) {
+        this._draw();
+        this._lastDraw = {value:this.value, w, h};
+      }
+    }
+    _resizeFrom(panel){
+      const rect = (panel||this.c).getBoundingClientRect();
+      let w = rect.width||0, h = rect.height||0;
+      if (h < 2) h = w;
+      const s = Math.max(1, Math.min(w, h));
+      const px = this.pixelRatio;
+      const W = (s * px) | 0, H = (s * px) | 0;
+      if (this.c.width !== W || this.c.height !== H){
+        this.c.width = W; this.c.height = H;
+        this._dot = null;
+      }
+      this._draw(true);
+      this._lastDraw = {value:Infinity, w:W, h:H};
     }
     _draw(){
       const ctx=this.ctx, W=this.c.width, H=this.c.height;
@@ -4128,12 +4162,13 @@ def home():
       ctx.save(); ctx.translate(cx,cy); ctx.rotate(-Math.PI/2);
       ctx.lineWidth = (R-inner);
 
-      // track
       ctx.strokeStyle='#ffffff16';
       ctx.beginPath(); ctx.arc(0,0,(R+inner)/2, 0, Math.PI*2); ctx.stroke();
 
-      // fill
-      const p=clamp01(this.value), maxAng=p*Math.PI*2, segs=220;
+      const p=clamp01(this.value), maxAng=p*Math.PI*2;
+      const perimeter = Math.PI * (W + H);
+      const base = (this._quality>0 ? 110 : 140) - (this._quality*25) - (isLowEnd?30:0);
+      const segs = Math.max(48, Math.min(base, Math.round(perimeter / (85 * this.pixelRatio))));
       for(let i=0;i<segs;i++){
         const t0=i/segs; if(t0>=p) break;
         const a0=t0*maxAng, a1=((i+1)/segs)*maxAng;
@@ -4143,18 +4178,22 @@ def home():
         ctx.stroke();
       }
 
-      // specular sweep
-      const sp = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sweep-speed')) || (prefersReduced? .04 : .12);
-      const t = performance.now()/1000;
-      const sweepAng = (t * sp) % (Math.PI*2);
-      ctx.save(); ctx.rotate(sweepAng);
-      const dotR = Math.max(4*this.pixelRatio, (R-inner)*0.22);
-      const grad = ctx.createRadialGradient((R+inner)/2,0, 2, (R+inner)/2,0, dotR);
-      grad.addColorStop(0, 'rgba(255,255,255,.95)');
-      grad.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = grad; ctx.beginPath();
-      ctx.arc((R+inner)/2,0, dotR, 0, Math.PI*2); ctx.fill();
-      ctx.restore();
+      if(!disableSweep){
+        const sp = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sweep-speed')) || (prefersReduced? .04 : .12);
+        const t = performance.now()/1000;
+        const sweepAng = (t * sp) % (Math.PI*2);
+        ctx.save(); ctx.rotate(sweepAng);
+        const dotR = Math.max(4*this.pixelRatio, (R-inner)*0.22);
+        if (!this._dot || this._dot.r !== dotR){
+          const g = ctx.createRadialGradient((R+inner)/2,0, 2, (R+inner)/2,0, dotR);
+          g.addColorStop(0, 'rgba(255,255,255,.95)');
+          g.addColorStop(1, 'rgba(255,255,255,0)');
+          this._dot = {grad:g, r:dotR};
+        }
+        ctx.fillStyle = this._dot.grad; ctx.beginPath();
+        ctx.arc((R+inner)/2,0, dotR, 0, Math.PI*2); ctx.fill();
+        ctx.restore();
+      }
 
       ctx.restore();
     }
@@ -4163,7 +4202,7 @@ def home():
       const r=(a>>16)&255, g=(a>>8)&255, bl=a&255;
       const r2=(b>>16)&255, g2=(b>>8)&255, bl2=b&255;
       const m=(x,y)=>Math.round(x+(y-x)*k);
-      return `#${m(r,r2).toString(16).padStart(2,'0')}${m(g,g2).toString(16).padStart(2,'0')}${m(bl,bl2).toString(16).padStart(2,'0')}`;
+      return `#${m(r,r2).toString(16).padStart(2,'0')}${m(g,g2).toString(16).padStart(2,'0')}${m(bl,bl2).toString(16,'0').padStart(2,'0')}`;
     }
     _colorAt(t){
       const acc = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#49c2ff';
@@ -4174,9 +4213,31 @@ def home():
   }
 
   /* =====================
+     Frame watchdog (auto quality shift)
+  ====================== */
+  class FPSWatch {
+    constructor(n=40){ this.n=n; this.arr=[]; this.last=performance.now(); this.avg=16.7; }
+    sample(now){
+      const dt = now - this.last; this.last=now;
+      this.arr.push(dt); if(this.arr.length>this.n) this.arr.shift();
+      this.avg = this.arr.reduce((a,b)=>a+b,0)/this.arr.length;
+      return dt;
+    }
+  }
+  const fps = new FPSWatch(48);
+  let qualityLevel = isLowEnd ? 1 : 0;
+  const wheel = new RiskWheel(document.getElementById('wheelCanvas'));
+  wheel.setQuality(qualityLevel);
+
+  function maybeRegrade(now){
+    const budget = prefersReduced ? 33 : 16.7;
+    if (fps.avg > budget*1.35 && qualityLevel < 2){ qualityLevel++; wheel.setQuality(qualityLevel); disableSweep = disableSweep || qualityLevel>=2; }
+    else if (fps.avg < budget*0.85 && qualityLevel > 0){ qualityLevel--; wheel.setQuality(qualityLevel); }
+  }
+
+  /* =====================
      Store + bindings
   ====================== */
-  const wheel = new RiskWheel(document.getElementById('wheelCanvas'));
   const hudNumber=$('#hudNumber'), hudLabel=$('#hudLabel'), hudNote=$('#hudNote');
   const reasonsList=$('#reasonsList'), confidencePill=$('#confidencePill'), debugBox=$('#debugBox');
   const btnGuess=$('#btnGuess'), btnRoute=$('#btnRoute'), btnHybrid=$('#btnHybrid');
@@ -4186,12 +4247,12 @@ def home():
   function setHUD(j){
     const pct = Math.round(clamp01(j.harm_ratio||0)*100);
     hudNumber.textContent = pct + "%";
-    hudLabel.textContent = (j.label||"").toUpperCase() || (pct<40?"CLEAR":pct<75?"CHANGING":"ELEVATED");
-    hudNote.textContent  = j.blurb || (pct<40?"Looks good ahead":"Stay adaptive and scan");
+    hudLabel.textContent = (j.label||"").toUpperCase() || (pct<40?"CALM":pct<75?"WATCH":"ALERT");
+    hudNote.textContent  = j.blurb || (pct<40?"All clear":"Keep an eye out");
     if (j.color){ document.documentElement.style.setProperty('--accent', j.color); }
     confidencePill.textContent = "Conf: " + (j.confidence!=null ? Math.round(clamp01(j.confidence)*100) : "--") + "%";
     reasonsList.innerHTML="";
-    (Array.isArray(j.reasons)? j.reasons.slice(0,8):["Model is composing context…"]).forEach(x=>{
+    (Array.isArray(j.reasons)? j.reasons.slice(0,8):["The model is preparing your reading…"]).forEach(x=>{
       const li=document.createElement('li'); li.textContent=x; reasonsList.appendChild(li);
     });
     if (btnDebug.getAttribute('aria-pressed')==='true'){
@@ -4202,7 +4263,7 @@ def home():
   function applyReading(j){
     if(!j || typeof j.harm_ratio!=='number') return;
     const now = Date.now();
-    if (lastApplyAt && (now - lastApplyAt) < MIN_UPDATE_MS) return; // ⏱️ throttle to once per minute
+    if (lastApplyAt && (now - lastApplyAt) < MIN_UPDATE_MS) return;
     lastApplyAt = now;
 
     current.last=j; current.harm = clamp01(j.harm_ratio);
@@ -4247,10 +4308,38 @@ def home():
   function isRouteFilled(){ return [lat.value,lon.value,dlat.value,dlon.value].every(v=>v && !isNaN(parseFloat(v))); }
   function currentRoute(){ return { lat:parseFloat(lat.value), lon:parseFloat(lon.value), dest_lat:parseFloat(dlat.value), dest_lon:parseFloat(dlon.value) }; }
 
+  /* =====================
+     Networking with timeout & backoff
+  ====================== */
+  let backoffMs = 0;
+  function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+  async function fetchWithTimeout(url, opts={}, ms=3500){
+    const ctrl = new AbortController(); const id = setTimeout(()=>ctrl.abort(), ms);
+    try{
+      const r = await fetch(url, {...opts, signal: ctrl.signal});
+      clearTimeout(id); return r;
+    }catch(e){
+      clearTimeout(id); throw e;
+    }
+  }
+  async function fetchJson(url){
+    try{
+      if(backoffMs) await sleep(backoffMs);
+      const r= await fetchWithTimeout(url, {credentials:'same-origin', cache:'no-store'});
+      backoffMs = 0; return await r.json();
+    }catch(e){ backoffMs = Math.min(16000, (backoffMs||1000)*2); return null; }
+  }
+  async function postJson(url, body){
+    try{
+      if(backoffMs) await sleep(backoffMs);
+      const r= await fetchWithTimeout(url, {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', cache:'no-store', body:JSON.stringify(body)});
+      backoffMs = 0; return await r.json();
+    }catch(e){ backoffMs = Math.min(16000, (backoffMs||1000)*2); return null; }
+  }
+
   async function fetchOnce(){
     if(current.mode==='guess') return fetchGuessOnce();
     if(current.mode==='route') return fetchRouteOnce();
-    // hybrid
     if(isRouteFilled()){
       const [g, r] = await Promise.allSettled([fetchJson('/api/risk/llm_guess'), postJson('/api/risk/llm_route', currentRoute())]);
       const gj = g.status==='fulfilled'? g.value : null;
@@ -4270,37 +4359,65 @@ def home():
       ...(Array.isArray(a.reasons)? a.reasons.slice(0,3):[]),
       ...(Array.isArray(b.reasons)? b.reasons.slice(0,3):[])
     ];
-    const label = hr<.4?'clear':hr<.75?'changing':'elevated';
+    const label = hr<.4?'calm':hr<.75?'watch':'alert';
     return { ...(b||a), harm_ratio: hr, confidence: conf, reasons, label };
   }
 
   async function fetchGuessOnce(){ const j = await fetchJson('/api/risk/llm_guess'); applyReading(j); }
   async function fetchRouteOnce(){
-    if(!isRouteFilled()){ hudNote.textContent="Enter lat/lon + dest lat/lon."; return; }
+    if(!isRouteFilled()){ hudNote.textContent="Please enter start and destination coordinates."; return; }
     const j = await postJson('/api/risk/llm_route', currentRoute()); applyReading(j);
   }
 
-  async function fetchJson(url){ try{ const r=await fetch(url, {credentials:'same-origin'}); return await r.json(); }catch(e){ return null; } }
-  async function postJson(url, body){
-    try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)}); return await r.json(); }catch(e){ return null; }
-  }
-
-  // Optional SSE (throttled by applyReading to once per minute)
-  (function trySSE(){
-    if(!('EventSource' in window)) return;
+  // SSE — pause when hidden/offscreen
+  let es = null, sseEnabled = false, sseWants = true;
+  function startSSE(){
+    if(!('EventSource' in window) || sseEnabled===true) return;
     try{
-      const es = new EventSource('/api/risk/stream');
+      es = new EventSource('/api/risk/stream');
       es.onmessage = ev=>{ try{ const j=JSON.parse(ev.data); applyReading(j); }catch(_){} };
-      es.onerror = ()=>{ es.close(); };
-    }catch(e){}
-  })();
+      es.onerror = ()=>{ es && es.close(); sseEnabled=false; };
+      sseEnabled = true;
+    }catch(e){ sseEnabled=false; }
+  }
+  function stopSSE(){ if(es){ es.close(); es=null; } sseEnabled=false; }
+
+  let paused = document.hidden;
+  let onScreen = true;
+  const io = new IntersectionObserver(entries => {
+    onScreen = entries[0]?.isIntersecting ?? true;
+    if (!onScreen){ stopSSE(); } else if (!document.hidden && sseWants){ startSSE(); }
+  }, {threshold: 0.1});
+  const panelEl = $('#wheelPanel'); if(panelEl) io.observe(panelEl);
+
+  document.addEventListener('visibilitychange', () => {
+    paused = document.hidden;
+    if (paused) stopSSE(); else if (onScreen && sseWants) startSSE();
+  });
+
+  let lastFrame = performance.now();
+  class FPSWatch { constructor(n=40){ this.n=n; this.arr=[]; this.last=performance.now(); this.avg=16.7; } sample(now){ const dt=now-this.last; this.last=now; this.arr.push(dt); if(this.arr.length>this.n) this.arr.shift(); this.avg=this.arr.reduce((a,b)=>a+b,0)/this.arr.length; return dt; } }
+  const fps = new FPSWatch(48);
+  function frame(now){
+    fps.sample(now);
+    if((now - lastFrame) > 500){ lastFrame = now; }
+    if(!paused && onScreen){
+      breath.tick();
+      wheel.tick();
+      applyParallax();
+      maybeRegrade(now);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
 
   // Boot
-  toggleSeg('guess'); startAuto();
+  toggleSeg('guess'); startAuto(); sseWants = true; if(!document.hidden && onScreen) startSSE();
   </script>
 </body>
 </html>
     """, seed_hex=seed_hex, seed_code=seed_code)
+
 
 
 @app.route('/login', methods=['GET', 'POST'])
