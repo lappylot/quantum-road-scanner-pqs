@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git cmake ninja-build build-essential pkg-config ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# --- build & install liboqs (shared, pinned to v0.14.0) ---
-RUN git clone --branch "v0.14.0" --depth=1 --recurse-submodules https://github.com/open-quantum-safe/liboqs /tmp/liboqs \
+# --- build & install liboqs (shared, pinned to 0.14.0) ---
+RUN git clone --branch "0.14.0" --depth=1 --recurse-submodules https://github.com/open-quantum-safe/liboqs /tmp/liboqs \
  && cmake -S /tmp/liboqs -B /tmp/liboqs/build \
       -DCMAKE_INSTALL_PREFIX=/usr/local \
       -DBUILD_SHARED_LIBS=ON \
@@ -35,8 +35,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# install the oqs Python wrapper after liboqs exists (pinned to v0.12.0)
-RUN pip install --no-cache-dir "git+https://github.com/open-quantum-safe/liboqs-python@v0.12.0"
+# install the oqs Python wrapper after liboqs exists (pinned to 0.12.0)
+RUN pip install --no-cache-dir "git+https://github.com/open-quantum-safe/liboqs-python@0.12.0"
 
 # copy the rest
 COPY . .
