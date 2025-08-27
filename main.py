@@ -248,7 +248,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
         salt = os.urandom(32)
         _b64set(ENV_SALT_B64, salt)
         exports.append((ENV_SALT_B64, base64.b64encode(salt).decode()))
-        logger.DEBUG("Generated KDF salt to env.")
+        logger.debug("Generated KDF salt to env.")
     kek = _derive_kek(passphrase, salt)
 
 
@@ -265,7 +265,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
         _b64set(ENV_X25519_PRIV_ENC_B64, x_enc)
         exports.append((ENV_X25519_PUB_B64, base64.b64encode(x_pub).decode()))
         exports.append((ENV_X25519_PRIV_ENC_B64, base64.b64encode(x_enc).decode()))
-        logger.DEBUG("Generated x25519 keypair to env.")
+        logger.debug("Generated x25519 keypair to env.")
 
 
     need_pq = strict_pq2 or os.getenv(ENV_PQ_KEM_ALG) or oqs is not None
@@ -287,7 +287,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
                 exports.append((ENV_PQ_KEM_ALG, alg))
                 exports.append((ENV_PQ_PUB_B64, base64.b64encode(pq_pub).decode()))
                 exports.append((ENV_PQ_PRIV_ENC_B64, base64.b64encode(pq_enc).decode()))
-                logger.DEBUG("Generated PQ KEM keypair (%s) to env.", alg)
+                logger.debug("Generated PQ KEM keypair (%s) to env.", alg)
 
 
     if not (os.getenv(ENV_SIG_ALG) and os.getenv(ENV_SIG_PUB_B64) and os.getenv(ENV_SIG_PRIV_ENC_B64)):
@@ -303,7 +303,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
             exports.append((ENV_SIG_ALG, pq_sig))
             exports.append((ENV_SIG_PUB_B64, base64.b64encode(sig_pub).decode()))
             exports.append((ENV_SIG_PRIV_ENC_B64, base64.b64encode(sig_enc).decode()))
-            logger.DEBUG("Generated PQ signature keypair (%s) to env.", pq_sig)
+            logger.debug("Generated PQ signature keypair (%s) to env.", pq_sig)
         else:
             if strict_pq2:
                 raise RuntimeError("Strict PQ2 mode: ML-DSA required but oqs unavailable.")
@@ -321,7 +321,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
             exports.append((ENV_SIG_ALG, "Ed25519"))
             exports.append((ENV_SIG_PUB_B64, base64.b64encode(pub).decode()))
             exports.append((ENV_SIG_PRIV_ENC_B64, base64.b64encode(enc).decode()))
-            logger.DEBUG("Generated Ed25519 signature keypair to env (fallback).")
+            logger.debug("Generated Ed25519 signature keypair to env (fallback).")
 
     if echo_exports:
         print("# --- QRS bootstrap exports (persist in your secret store) ---")
@@ -518,7 +518,7 @@ def rotate_secret_key():
                 RECENT_KEYS.appendleft(prev)
             app.secret_key = sk
             fp = base64.b16encode(sk[:6]).decode()
-            logger.DEBUG(f"Secret key rotated (fp={fp})")
+            logger.debug(f"Secret key rotated (fp={fp})")
         time.sleep(get_very_complex_random_interval())
 
 BASE_DIR = Path(__file__).parent.resolve()
@@ -609,7 +609,7 @@ class KeyManager:
         try:
             kdf = Scrypt(salt=salt, length=32, n=65536, r=8, p=1, backend=self.backend)
             self.encryption_key = kdf.derive(passphrase.encode())
-            logger.DEBUG("Encryption key successfully derived (env salt).")
+            logger.debug("Encryption key successfully derived (env salt).")
         except Exception as e:
             logger.error(f"Failed to derive encryption key: {e}")
             raise
@@ -970,7 +970,7 @@ class SealedStore:
             split_kek = self._derive_split_kek(base_kek)
             blob = self._seal(split_kek, rec)
             _b64set(ENV_SEALED_B64, blob)
-            logger.DEBUG("Sealed store saved to env.")
+            logger.debug("Sealed store saved to env.")
         except Exception as e:
             logger.error(f"Sealed save failed: {e}", exc_info=True)
 
@@ -1002,7 +1002,7 @@ class SealedStore:
             if cache.get("sig_alg"):
                 self.km.sig_alg_name = cache["sig_alg"] or self.km.sig_alg_name
 
-            logger.DEBUG("Sealed store loaded from env into KeyManager cache.")
+            logger.debug("Sealed store loaded from env into KeyManager cache.")
             return True
         except Exception as e:
             logger.error(f"Sealed load failed: {e}")
@@ -1054,7 +1054,7 @@ def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
             .public_key()
             .public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         )
-        logger.DEBUG("x25519 public key derived from sealed cache.")
+        logger.debug("x25519 public key derived from sealed cache.")
     else:
         raise RuntimeError("x25519 key material not found (neither ENV nor sealed cache).")
 
@@ -1082,7 +1082,7 @@ def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
             raise RuntimeError("Strict PQ2 mode: ML-KEM keys not fully available (need alg+pub+priv).")
 
     # Log what we ended up with (helps debugging)
-    logger.DEBUG(
+    logger.debug(
         "Hybrid keys loaded: x25519_pub=%s, pq_alg=%s, pq_pub=%s, pq_priv=%s (sealed=%s)",
         "yes" if self.x25519_pub else "no",
         self._pq_alg_name or "none",
@@ -1215,7 +1215,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
             _b64set(ENV_SIG_PUB_B64, pub_raw)
             _b64set(ENV_SIG_PRIV_ENC_B64, enc_raw)
             alg, pub, enc = try_pq, pub_raw, enc_raw
-            logger.DEBUG("Generated PQ signature keypair (%s) into ENV.", try_pq)
+            logger.debug("Generated PQ signature keypair (%s) into ENV.", try_pq)
         else:
             if STRICT_PQ2_ONLY:
                 raise RuntimeError("Strict PQ2 mode: ML-DSA signature required, but oqs unavailable.")
@@ -1234,7 +1234,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
             _b64set(ENV_SIG_PUB_B64, pub_raw)
             _b64set(ENV_SIG_PRIV_ENC_B64, enc_raw)
             alg, pub, enc = "Ed25519", pub_raw, enc_raw
-            logger.DEBUG("Generated Ed25519 signature keypair into ENV (fallback).")
+            logger.debug("Generated Ed25519 signature keypair into ENV (fallback).")
 
     # Cache into the instance
     self.sig_alg_name = alg
@@ -2066,7 +2066,7 @@ def ensure_admin_from_env():
     admin_pass = os.getenv("admin_pass")
 
     if not admin_user or not admin_pass:
-        logger.DEBUG(
+        logger.debug(
             "Env admin credentials not fully provided; skipping seeding.")
         return
 
@@ -2107,14 +2107,14 @@ def ensure_admin_from_env():
                 cursor.execute("UPDATE users SET password = ? WHERE id = ?",
                                (stored_hash, user_id))
             db.commit()
-            logger.DEBUG(
+            logger.debug(
                 "Admin user ensured/updated from env (dynamic Argon2id).")
         else:
             cursor.execute(
                 "INSERT INTO users (username, password, is_admin, preferred_model) VALUES (?, ?, 1, ?)",
                 (admin_user, hashed, preferred_model_encrypted))
             db.commit()
-            logger.DEBUG("Admin user created from env (dynamic Argon2id).")
+            logger.debug("Admin user created from env (dynamic Argon2id).")
 
 
 def enforce_admin_presence():
@@ -2125,7 +2125,7 @@ def enforce_admin_presence():
         admins = cursor.fetchone()[0]
 
     if admins > 0:
-        logger.DEBUG("Admin presence verified.")
+        logger.debug("Admin presence verified.")
         return
 
     ensure_admin_from_env()
@@ -2186,7 +2186,7 @@ def set_registration_enabled(enabled: bool, admin_user_id: int):
             cursor.execute("REPLACE INTO config (key, value) VALUES (?, ?)",
                            ('registration_enabled', '1' if enabled else '0'))
             db.commit()
-            logger.DEBUG(
+            logger.debug(
                 f"Admin user_id {admin_user_id} set registration_enabled to {enabled}."
             )
 
@@ -2257,15 +2257,15 @@ def start_background_jobs_once() -> None:
         # Only rotate the Flask session key if explicitly enabled
         if os.getenv("QRS_ROTATE_SESSION_KEY", "0") == "1":
             threading.Thread(target=rotate_secret_key, daemon=True).start()
-            logger.DEBUG("Session key rotation thread started (QRS_ROTATE_SESSION_KEY=1).")
+            logger.debug("Session key rotation thread started (QRS_ROTATE_SESSION_KEY=1).")
         else:
-            logger.DEBUG("Session key rotation disabled (QRS_ROTATE_SESSION_KEY!=1).")
+            logger.debug("Session key rotation disabled (QRS_ROTATE_SESSION_KEY!=1).")
 
         threading.Thread(target=delete_expired_data, daemon=True).start()
         app._bg_started = True
-        logger.DEBUG("Background jobs started in PID %s", os.getpid())
+        logger.debug("Background jobs started in PID %s", os.getpid())
     else:
-        logger.DEBUG("Background jobs skipped in PID %s (another proc owns the lock)", os.getpid())
+        logger.debug("Background jobs skipped in PID %s (another proc owns the lock)", os.getpid())
 
 @app.get('/healthz')
 def healthz():
@@ -2300,7 +2300,7 @@ def delete_expired_data():
                     cursor.execute(
                         "DELETE FROM hazard_reports WHERE timestamp <= ?",
                         (expiration_str,))
-                    logger.DEBUG(
+                    logger.debug(
                         f"Deleted expired hazard_reports IDs: {expired_hazard_ids}"
                     )
                 else:
@@ -2320,7 +2320,7 @@ def delete_expired_data():
                     cursor.execute(
                         "DELETE FROM entropy_logs WHERE timestamp <= ?",
                         (expiration_str,))
-                    logger.DEBUG(
+                    logger.debug(
                         f"Deleted expired entropy_logs IDs: {expired_entropy_ids}"
                     )
                 else:
@@ -2334,7 +2334,7 @@ def delete_expired_data():
                     cursor = db.cursor()
                     for _ in range(3):
                         cursor.execute("VACUUM")
-                logger.DEBUG("Database triple VACUUM completed with sector randomization.")
+                logger.debug("Database triple VACUUM completed with sector randomization.")
             except sqlite3.OperationalError as e:
                 logger.error(f"VACUUM failed: {e}", exc_info=True)
 
@@ -2364,12 +2364,12 @@ def delete_user_data(user_id):
             cursor.execute("DELETE FROM entropy_logs WHERE pass_num = ?", (user_id, ))
 
             db.commit()
-            logger.DEBUG(f"Securely deleted all data for user_id {user_id}")
+            logger.debug(f"Securely deleted all data for user_id {user_id}")
 
             cursor.execute("VACUUM")
             cursor.execute("VACUUM")
             cursor.execute("VACUUM")
-            logger.DEBUG("Database VACUUM completed for secure data deletion.")
+            logger.debug("Database VACUUM completed for secure data deletion.")
 
     except Exception as e:
         db.rollback()
@@ -2866,7 +2866,7 @@ or
         return reverse_geocode(lat, lon, city_index)
 
     if not result:
-        logger.DEBUG("Empty OpenAI result; using fallback.")
+        logger.debug("Empty OpenAI result; using fallback.")
         return reverse_geocode(lat, lon, city_index)
 
     clean = bleach.clean(result.strip(), tags=[], strip=True)
@@ -2881,7 +2881,7 @@ or
         left, country = _split_country(first)
         city, county, state = _parse_base(left)
     except ValueError:
-        logger.DEBUG("LLM output failed format guard (%s); using fallback.", first)
+        logger.debug("LLM output failed format guard (%s); using fallback.", first)
         return reverse_geocode(lat, lon, city_index)
 
     country = (country or likely_country_code or "US").strip()
@@ -2911,7 +2911,7 @@ def save_street_name_to_db(lat: float, lon: float, street_name: str):
                     SET street_name=?
                     WHERE id=?
                 """, (street_name_encrypted, existing_record[0]))
-                logger.DEBUG(
+                logger.debug(
                     f"Updated record {existing_record[0]} with street name {street_name}."
                 )
             else:
@@ -2920,7 +2920,7 @@ def save_street_name_to_db(lat: float, lon: float, street_name: str):
                     INSERT INTO hazard_reports (latitude, longitude, street_name)
                     VALUES (?, ?, ?)
                 """, (lat_encrypted, lon_encrypted, street_name_encrypted))
-                logger.DEBUG(f"Inserted new street name record: {street_name}.")
+                logger.debug(f"Inserted new street name record: {street_name}.")
 
             db.commit()
     except sqlite3.Error as e:
@@ -3091,7 +3091,7 @@ def register_user(username, password, invite_code=None):
                 cursor.execute(
                     "UPDATE invite_codes SET is_used = 1 WHERE id = ?",
                     (row[0], ))
-                logger.DEBUG(
+                logger.debug(
                     f"Invite code ID {row[0]} used by user '{username}'.")
 
             is_admin = 0
@@ -3101,7 +3101,7 @@ def register_user(username, password, invite_code=None):
                 (username, hashed_password, is_admin,
                  preferred_model_encrypted))
             user_id = cursor.lastrowid
-            logger.DEBUG(
+            logger.debug(
                 f"User '{username}' registered successfully with user_id {user_id}."
             )
 
@@ -3396,7 +3396,7 @@ async def phf_filter_input(input_text: str) -> tuple[bool, str]:
         logger.debug("Attempting OpenAI PHF check.")
         response = await run_openai_completion(openai_prompt)
         if response and ("Safe" in response or "Flagged" in response):
-            logger.DEBUG("OpenAI PHF succeeded: %s", response.strip())
+            logger.debug("OpenAI PHF succeeded: %s", response.strip())
             return "Safe" in response, f"OpenAI: {response.strip()}"
         logger.debug("OpenAI PHF did not return expected keywords.")
     except Exception as e:
@@ -3590,7 +3590,7 @@ async def run_openai_completion(prompt):
 
                 reply = await _extract_text_from_responses(data)
                 if reply:
-                    logger.DEBUG("run_openai_completion succeeded on attempt %d.", attempt)
+                    logger.debug("run_openai_completion succeeded on attempt %d.", attempt)
                     return reply.strip()
                 else:
 
@@ -3614,7 +3614,7 @@ async def run_openai_completion(prompt):
                 logger.error("Attempt %d failed due to unexpected error: %s", attempt, e, exc_info=True)
 
             if attempt < max_retries:
-                logger.DEBUG("Retrying run_openai_completion after delay.")
+                logger.debug("Retrying run_openai_completion after delay.")
                 await asyncio.sleep(delay)
                 delay *= backoff_factor
 
