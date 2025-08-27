@@ -4435,7 +4435,9 @@ def login():
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    global registration_enabled
+    # Get the registration flag from the environment variable, default is False
+    registration_enabled = os.getenv('REGISTRATION_ENABLED', 'false').lower() == 'true'
+
     error_message = ""
     form = RegisterForm()
     if form.validate_on_submit():
@@ -4571,7 +4573,6 @@ def register():
 </body>
 </html>
     """, form=form, error_message=error_message, registration_enabled=registration_enabled)
-
 
 
 @app.route('/settings', methods=['GET', 'POST'])
