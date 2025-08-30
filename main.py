@@ -74,7 +74,7 @@ except Exception:
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 try:
-    import fcntl  # POSIX-only file locking (Linux/macOS). If unavailable, we fall back gracefully.
+    import fcntl  
 except Exception:
     fcntl = None
 class SealedCache(TypedDict, total=False):
@@ -168,19 +168,19 @@ if 'parse_safe_float' not in globals():
             raise ValueError("Non-finite float not allowed")
         return f
 
-# === ENV names for key-only-in-env mode ===
-ENV_SALT_B64              = "QRS_SALT_B64"             # base64 salt for KDF (Scrypt/Argon2)
-ENV_X25519_PUB_B64        = "QRS_X25519_PUB_B64"
-ENV_X25519_PRIV_ENC_B64   = "QRS_X25519_PRIV_ENC_B64"  # AESGCM(nonce|ct) b64
-ENV_PQ_KEM_ALG            = "QRS_PQ_KEM_ALG"           # e.g. "ML-KEM-768"
-ENV_PQ_PUB_B64            = "QRS_PQ_PUB_B64"
-ENV_PQ_PRIV_ENC_B64       = "QRS_PQ_PRIV_ENC_B64"      # AESGCM(nonce|ct) b64
-ENV_SIG_ALG               = "QRS_SIG_ALG"              # "ML-DSA-87"/"Dilithium5"/"Ed25519"
-ENV_SIG_PUB_B64           = "QRS_SIG_PUB_B64"
-ENV_SIG_PRIV_ENC_B64      = "QRS_SIG_PRIV_ENC_B64"     # AESGCM(nonce|ct) b64
-ENV_SEALED_B64            = "QRS_SEALED_B64"           # sealed store JSON (env) b64
 
-# Small b64 helpers (env <-> bytes)
+ENV_SALT_B64              = "QRS_SALT_B64"            
+ENV_X25519_PUB_B64        = "QRS_X25519_PUB_B64"
+ENV_X25519_PRIV_ENC_B64   = "QRS_X25519_PRIV_ENC_B64"  
+ENV_PQ_KEM_ALG            = "QRS_PQ_KEM_ALG"           
+ENV_PQ_PUB_B64            = "QRS_PQ_PUB_B64"
+ENV_PQ_PRIV_ENC_B64       = "QRS_PQ_PRIV_ENC_B64"    
+ENV_SIG_ALG               = "QRS_SIG_ALG"             
+ENV_SIG_PUB_B64           = "QRS_SIG_PUB_B64"
+ENV_SIG_PRIV_ENC_B64      = "QRS_SIG_PRIV_ENC_B64"   
+ENV_SEALED_B64            = "QRS_SEALED_B64"           
+
+
 def _b64set(name: str, raw: bytes) -> None:
     os.environ[name] = base64.b64encode(raw).decode("utf-8")
 
@@ -196,9 +196,9 @@ def _derive_kek(passphrase: str, salt: bytes) -> bytes:
     return hash_secret_raw(
         passphrase.encode("utf-8"),
         salt,
-        3,                      # time_cost
-        512 * 1024,             # memory_cost (KiB)
-        max(2, (os.cpu_count() or 2)//2),  # parallelism
+        3,                      
+        512 * 1024,             
+        max(2, (os.cpu_count() or 2)//2), 
         32,
         ArgonType.ID
     )
@@ -569,7 +569,7 @@ class KeyManager:
     sig_pub: Optional[bytes] = None
     _sig_priv_enc: Optional[bytes] = None
     sealed_store: Optional["SealedStore"] = None
-    # note: no on-disk dirs/paths anymore
+
 
     def _oqs_kem_name(self) -> Optional[str]: ...
     def _load_or_create_hybrid_keys(self) -> None: ...
@@ -723,11 +723,7 @@ class ColorSync:
         self._epoch = secrets.token_bytes(16)
 
     def sample(self, uid: str | None = None) -> dict:
-        """
-        If uid is provided → stable accent seed (UI personalization).
-        If uid is None → entropy-driven sample (crypto/entropy context).
-        Always returns unified dict shape.
-        """
+
         if uid is not None:
             # --- UI Accent Mode ---
             seed = _stable_seed(uid + base64.b16encode(self._epoch[:4]).decode())
@@ -739,7 +735,7 @@ class ColorSync:
             hexc = f"#{j:06x}"
             code = rng.choice(["A1","A2","B2","C1","C2","D1","E3"])
 
-            # Convert to perceptual coordinates
+        
             h, s, l = self._rgb_to_hsl(j)
             L, C, H = _approx_oklch_from_rgb(
                 (j >> 16 & 0xFF) / 255.0,
@@ -757,7 +753,7 @@ class ColorSync:
                 "source": "accent",
             }
 
-        # --- Entropy / Crypto Mode ---
+
         try:
             cpu, ram = get_cpu_ram_usage()
         except Exception:
@@ -814,7 +810,7 @@ class ColorSync:
 
     @staticmethod
     def _rgb_to_hsl(rgb_int: int) -> tuple[int, int, int]:
-        """Convert packed int (0xRRGGBB) to HSL triple (h, s, l)."""
+ 
         r = (rgb_int >> 16 & 0xFF) / 255.0
         g = (rgb_int >> 8 & 0xFF) / 255.0
         b = (rgb_int & 0xFF) / 255.0
@@ -914,7 +910,7 @@ class SealedRecord:
 
 class SealedStore:
     def __init__(self, km: "KeyManager"):
-        self.km = km  # no dirs/files created
+        self.km = km 
 
     def _derive_split_kek(self, base_kek: bytes) -> bytes:
         shards_b64 = os.getenv(SHARDS_ENV, "")
@@ -1033,21 +1029,18 @@ def _try(f: Callable[[], Any]) -> bool:
 STRICT_PQ2_ONLY = bool(int(os.getenv("STRICT_PQ2_ONLY", "1")))
 
 def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
-    """
-    Populate hybrid (x25519 + optional PQ KEM) key handles from ENV,
-    falling back to the sealed cache when present. No files are touched.
-    """
+
     cache = getattr(self, "_sealed_cache", None)
 
-    # ---- X25519 ----
+
     x_pub_b   = _b64get(ENV_X25519_PUB_B64, required=False)
     x_privenc = _b64get(ENV_X25519_PRIV_ENC_B64, required=False)
 
     if x_pub_b:
-        # Env has the raw public key
+ 
         self.x25519_pub = x_pub_b
     elif cache and cache.get("x25519_priv_raw"):
-        # Derive pub from sealed raw private (env didn't provide pub)
+ 
         self.x25519_pub = (
             x25519.X25519PrivateKey
             .from_private_bytes(cache["x25519_priv_raw"])
@@ -1058,12 +1051,10 @@ def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
     else:
         raise RuntimeError("x25519 key material not found (neither ENV nor sealed cache).")
 
-    # If env doesn't carry the encrypted private, leave it empty;
-    # _decrypt_x25519_priv() will use the sealed cache path.
+
     self._x25519_priv_enc = x_privenc or b""
 
-    # ---- PQ KEM (ML-KEM) ----
-    # Prefer ENV alg; fall back to sealed cache hint
+
     self._pq_alg_name = os.getenv(ENV_PQ_KEM_ALG) or None
     if not self._pq_alg_name and cache and cache.get("kem_alg"):
         self._pq_alg_name = str(cache["kem_alg"]) or None
@@ -1071,17 +1062,17 @@ def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
     pq_pub_b   = _b64get(ENV_PQ_PUB_B64, required=False)
     pq_privenc = _b64get(ENV_PQ_PRIV_ENC_B64, required=False)
 
-    # Store what we have (pub for encap; priv_enc for decap via env path)
+
     self.pq_pub       = pq_pub_b or None
     self._pq_priv_enc = pq_privenc or None
 
-    # In strict mode we must have: alg + pub + (priv via env or sealed cache)
+
     if STRICT_PQ2_ONLY:
         have_priv = bool(pq_privenc) or bool(cache and cache.get("pq_priv_raw"))
         if not (self._pq_alg_name and self.pq_pub and have_priv):
             raise RuntimeError("Strict PQ2 mode: ML-KEM keys not fully available (need alg+pub+priv).")
 
-    # Log what we ended up with (helps debugging)
+
     logger.debug(
         "Hybrid keys loaded: x25519_pub=%s, pq_alg=%s, pq_pub=%s, pq_priv=%s (sealed=%s)",
         "yes" if self.x25519_pub else "no",
@@ -1107,16 +1098,13 @@ def _km_decrypt_x25519_priv(self: "KeyManager") -> x25519.X25519PrivateKey:
     return x25519.X25519PrivateKey.from_private_bytes(raw)
 
 def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
-    """
-    Return the raw ML-KEM private key bytes suitable for oqs decapsulation.
-    Prefers sealed cache; falls back to ENV-encrypted key if present.
-    """
-    # Prefer sealed cache (already raw)
+
+
     cache = getattr(self, "_sealed_cache", None)
     if cache is not None and cache.get("pq_priv_raw") is not None:
         return cache.get("pq_priv_raw")
 
-    # Otherwise try the env-encrypted private key
+
     pq_alg = getattr(self, "_pq_alg_name", None)
     pq_enc = getattr(self, "_pq_priv_enc", None)
     if not (pq_alg and pq_enc):
@@ -1135,11 +1123,7 @@ def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
 
 
 def _km_decrypt_sig_priv(self: "KeyManager") -> bytes:
-    """
-    Decrypts signature SK from ENV using Argon2id(passphrase + ENV_SALT_B64).
-    If a sealed_cache is present, returns raw from cache.
-    """
-    # Prefer sealed cache if available
+
     cache = getattr(self, "_sealed_cache", None)
     if cache is not None and "sig_priv_raw" in cache:
         return cache["sig_priv_raw"]
@@ -1178,19 +1162,14 @@ def _oqs_sig_name() -> Optional[str]:
 
 
 def _km_load_or_create_signing(self: "KeyManager") -> None:
-    """
-    ENV-only:
-      - Reads PQ/Ed25519 signing keys from ENV, or creates+stores them in ENV if missing.
-      - Private key is AESGCM( Argon2id( passphrase + ENV_SALT_B64 ) ).
-    Requires bootstrap_env_keys() to have set ENV_SALT_B64 at minimum.
-    """
-    # Try to read from ENV first
+ 
+   
     alg = os.getenv(ENV_SIG_ALG) or None
     pub = _b64get(ENV_SIG_PUB_B64, required=False)
     enc = _b64get(ENV_SIG_PRIV_ENC_B64, required=False)
 
     if not (alg and pub and enc):
-        # Need to generate keys and place into ENV
+       
         passphrase = os.getenv(self.passphrase_env_var) or ""
         if not passphrase:
             raise RuntimeError(f"{self.passphrase_env_var} not set")
@@ -1205,8 +1184,8 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
 
         try_pq = _oqs_sig_name() if oqs is not None else None
         if try_pq:
-            # Generate PQ signature (ML-DSA/Dilithium)
-            with oqs.Signature(try_pq) as s:  # type: ignore[attr-defined]
+            
+            with oqs.Signature(try_pq) as s:  
                 pub_raw = s.generate_keypair()
                 sk_raw  = s.export_secret_key()
             n = secrets.token_bytes(12)
@@ -1219,7 +1198,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
         else:
             if STRICT_PQ2_ONLY:
                 raise RuntimeError("Strict PQ2 mode: ML-DSA signature required, but oqs unavailable.")
-            # Ed25519 fallback
+            
             kp  = ed25519.Ed25519PrivateKey.generate()
             pub_raw = kp.public_key().public_bytes(
                 serialization.Encoding.Raw, serialization.PublicFormat.Raw
@@ -1236,7 +1215,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
             alg, pub, enc = "Ed25519", pub_raw, enc_raw
             logger.debug("Generated Ed25519 signature keypair into ENV (fallback).")
 
-    # Cache into the instance
+
     self.sig_alg_name = alg
     self.sig_pub = pub
     self._sig_priv_enc = enc
@@ -1271,15 +1250,14 @@ def _km_verify(self, pub: bytes, sig_bytes: bytes, data: bytes) -> bool:
     except Exception:
         return False
 
-# === Bind KeyManager monkeypatched methods (do this once, at the end) ===
-# === Bind KeyManager monkeypatched methods (ENV-only) ===
+
 _KM = cast(Any, KeyManager)
 _KM._oqs_kem_name               = _km_oqs_kem_name
 _KM._load_or_create_hybrid_keys = _km_load_or_create_hybrid_keys
 _KM._decrypt_x25519_priv        = _km_decrypt_x25519_priv
 _KM._decrypt_pq_priv            = _km_decrypt_pq_priv
-_KM._load_or_create_signing     = _km_load_or_create_signing   # <-- ENV version
-_KM._decrypt_sig_priv           = _km_decrypt_sig_priv         # <-- ENV version
+_KM._load_or_create_signing     = _km_load_or_create_signing   
+_KM._decrypt_sig_priv           = _km_decrypt_sig_priv      
 _KM.sign_blob                   = _km_sign
 _KM.verify_blob                 = _km_verify
 
@@ -1461,19 +1439,19 @@ class AuditTrail:
             logger.error(f"audit tail failed: {e}", exc_info=True)
         return out
 
-# 1) Generate any missing keys/salt/signing material into ENV (no files)
+
 bootstrap_env_keys(
     strict_pq2=STRICT_PQ2_ONLY,
     echo_exports=bool(int(os.getenv("QRS_BOOTSTRAP_SHOW","0")))
 )
 
-# 2) Proceed as usual, but everything now comes from ENV
+
 key_manager = KeyManager()
 encryption_key = key_manager.get_key()
 key_manager._sealed_cache = None
 key_manager.sealed_store = SealedStore(key_manager)
 
-# (Optional sealed cache in ENV – doesn't create files)
+
 if not key_manager.sealed_store.exists() and os.getenv("QRS_ENABLE_SEALED","1")=="1":
     key_manager._load_or_create_hybrid_keys()
     key_manager._load_or_create_signing()
@@ -1481,7 +1459,6 @@ if not key_manager.sealed_store.exists() and os.getenv("QRS_ENABLE_SEALED","1")=
 if key_manager.sealed_store.exists():
     key_manager.sealed_store.load_into_km()
 
-# Ensure runtime key handles are populated from ENV (no file paths)
 key_manager._load_or_create_hybrid_keys()
 key_manager._load_or_create_signing()
 
@@ -1850,9 +1827,9 @@ def quantum_hazard_scan(cpu_usage, ram_usage):
 registration_enabled = True
 
 try:
-    quantum_hazard_scan  # type: ignore[name-defined]
+    quantum_hazard_scan 
 except NameError:
-    quantum_hazard_scan = None  # fallback when module not present
+    quantum_hazard_scan = None  
 
 def create_tables():
     if not DB_FILE.exists():
@@ -2157,12 +2134,12 @@ def init_app_once():
     with _init_lock:
         if _init_done:
             return
-        # whatever you previously had in before_first_request:
+      
         ensure_admin_from_env()
         enforce_admin_presence()
         _init_done = True
 
-# execute once when the worker imports your module
+
 with app.app_context():
     init_app_once()
 
@@ -2225,7 +2202,7 @@ def fetch_entropy_logs():
 
 
 _BG_LOCK_PATH = os.getenv("QRS_BG_LOCK_PATH", "/tmp/qrs_bg.lock")
-_BG_LOCK_HANDLE = None  # keep process-lifetime handle
+_BG_LOCK_HANDLE = None 
 def start_background_jobs_once() -> None:
     global _BG_LOCK_HANDLE
     if getattr(app, "_bg_started", False):
@@ -2241,10 +2218,10 @@ def start_background_jobs_once() -> None:
             ok_to_start = os.environ.get("QRS_BG_STARTED") != "1"
             os.environ["QRS_BG_STARTED"] = "1"
     except Exception:
-        ok_to_start = False  # another proc owns it
+        ok_to_start = False 
 
     if ok_to_start:
-        # Only rotate the Flask session key if explicitly enabled
+
         if os.getenv("QRS_ROTATE_SESSION_KEY", "0") == "1":
             threading.Thread(target=rotate_secret_key, daemon=True).start()
             logger.debug("Session key rotation thread started (QRS_ROTATE_SESSION_KEY=1).")
@@ -2381,7 +2358,7 @@ gc = geonamescache.GeonamesCache()
 cities = gc.get_cities()
 
 
-# ---------- stable seed & identity ----------
+
 def _stable_seed(s: str) -> int:
     h = hashlib.sha256(s.encode("utf-8")).hexdigest()
     return int(h[:8], 16)
@@ -2410,7 +2387,7 @@ def _attach_cookie(resp):
     return resp
 
 
-# ---------- light JSON guard ----------
+
 def _safe_json_parse(txt: str):
     try:
         return json.loads(txt)
@@ -2423,7 +2400,7 @@ def _safe_json_parse(txt: str):
             return None
     return None
 
-_QML_OK = False  # set a safe default; we’ll probe at runtime
+_QML_OK = False 
 
 def _qml_ready() -> bool:
     try:
@@ -2432,16 +2409,12 @@ def _qml_ready() -> bool:
         return False
 
 def _quantum_features(cpu: float, ram: float):
-    """
-    Returns:
-      qs_dict: compact dict with entropy, peak state, etc.
-      qs_str : short string for prompt: {quantum_state}
-    """
+
     if not _qml_ready():
         return None, "unavailable"
     try:
         probs = np.asarray(quantum_hazard_scan(cpu, ram), dtype=float)  # le
-        # Shannon entropy (bits)
+        
         H = float(-(probs * np.log2(np.clip(probs, 1e-12, 1))).sum())
         idx = int(np.argmax(probs))
         peak_p = float(probs[idx])
@@ -2460,7 +2433,7 @@ def _quantum_features(cpu: float, ram: float):
     except Exception:
         return None, "error"
 
-# ---------- system signals (inject quantum_state & quantum_state_sig) ----------
+
 def _system_signals(uid: str):
     cpu = psutil.cpu_percent(interval=0.05)
     ram = psutil.virtual_memory().percent
@@ -2475,15 +2448,14 @@ def _system_signals(uid: str):
     }
     qs, qs_str = _quantum_features(out["cpu"], out["ram"])
     if qs is not None:
-        out["quantum_state"] = qs                # structured details (for logs/UI)
-        out["quantum_state_sig"] = qs_str        # <- this is your {quantum_state}
+        out["quantum_state"] = qs               
+        out["quantum_state_sig"] = qs_str      
     else:
-        out["quantum_state_sig"] = qs_str        # "unavailable"/"error"
+        out["quantum_state_sig"] = qs_str      
     return out
 
-# ---------- prompts: add {quantum_state} line ----------
 def _build_guess_prompt(user_id: str, sig: dict) -> str:
-    quantum_state = sig.get("quantum_state_sig", "unavailable")  # <- inject
+    quantum_state = sig.get("quantum_state_sig", "unavailable") 
     return f"""
 ROLE
 You a Hypertime Nanobot Quantum RoadRiskCalibrator v4 (Guess Mode)** —
@@ -2557,10 +2529,10 @@ EXAMPLE
 {{"harm_ratio":0.02,"label":"Clear","color":"#ffb300","confidence":0.98,"reasons":["Clear Route Detected","Traffic Minimal"],"blurb":"Obey All Road Laws. Drive Safe"}}
 """.strip()
 
-# ---------- HTTPX client (correct endpoint) ----------
+
 _httpx_client = None
 _BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
-_CHAT_PATH = "/v1/chat/completions"  # correct path
+_CHAT_PATH = "/v1/chat/completions"  
 
 def _maybe_httpx_client():
     """Create a pooled HTTPX client with sane defaults."""
@@ -2574,7 +2546,7 @@ def _maybe_httpx_client():
         return False
 
     _httpx_client = httpx.Client(
-        base_url=_BASE_URL,  # path carries /v1
+        base_url=_BASE_URL,
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -2584,12 +2556,9 @@ def _maybe_httpx_client():
     )
     return _httpx_client
 
-# ---------- LLM call (replaces OpenAI SDK) ----------
+
 def _call_llm(prompt: str):
-    """
-    Calls Chat Completions with JSON mode and returns parsed JSON (or None).
-    Uses OPENAI_BASE_URL/OPENAI_API_KEY/OPENAI_MODEL.
-    """
+
     client = _maybe_httpx_client()
     if not client:
         return None
@@ -2600,10 +2569,10 @@ def _call_llm(prompt: str):
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7,
         "max_tokens": 260,
-        "response_format": {"type": "json_object"},  # enforce JSON
+        "response_format": {"type": "json_object"}, 
     }
 
-    # retry for transient 429/5xx with jittered backoff
+
     for attempt in range(3):
         try:
             r = client.post(_CHAT_PATH, json=payload)
@@ -2651,7 +2620,7 @@ def api_llm_route():
     
 @app.route("/api/risk/stream")
 def api_stream():
-    # capture anything that touches `request`/`session` BEFORE streaming
+
     uid = _user_id()
 
     @stream_with_context
@@ -2659,7 +2628,7 @@ def api_stream():
         for _ in range(24):
             sig = _system_signals(uid)
             prompt = _build_guess_prompt(uid, sig)
-            data = _call_llm(prompt)  # ❌ no local fallback
+            data = _call_llm(prompt) 
 
             meta = {"ts": datetime.utcnow().isoformat() + "Z", "mode": "guess", "sig": sig}
             if not data:
@@ -2673,7 +2642,7 @@ def api_stream():
 
     resp = Response(gen(), mimetype="text/event-stream")
     resp.headers["Cache-Control"] = "no-cache"
-    resp.headers["X-Accel-Buffering"] = "no"   # avoids buffering on some proxies
+    resp.headers["X-Accel-Buffering"] = "no"   
     return _attach_cookie(resp)
     
 def _safe_get(d: Dict[str, Any], keys: List[str], default: str = "") -> str:
@@ -3671,7 +3640,7 @@ def index():
 
 @app.route('/home')
 def home():
-    # Optional: seed the user-specific accent so first paint is personalized.
+  
     seed = colorsync.sample()
     seed_hex = seed.get("hex", "#49c2ff")
     seed_code = seed.get("qid25", {}).get("code", "B2")
@@ -4575,10 +4544,9 @@ def register():
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
-    # Registration status is READ FROM ENV ONLY (REGISTRATION_ENABLED).
-    # Invite codes remain DB-backed (generate/list unchanged).
 
-    import os  # local import to keep this block self-contained
+
+    import os  
 
     if 'is_admin' not in session or not session.get('is_admin'):
         return redirect(url_for('dashboard'))
@@ -4587,7 +4555,7 @@ def settings():
     new_invite_code = None
     form = SettingsForm()
 
-    # Read current registration status from environment
+
     def _read_registration_from_env():
         val = os.getenv('REGISTRATION_ENABLED', 'false')
         return (val, str(val).strip().lower() in ('1', 'true', 'yes', 'on'))
@@ -4605,10 +4573,9 @@ def settings():
                 db.commit()
             message = f"New invite code generated: {new_invite_code}"
 
-        # Re-read env in case it changed between requests (no persistence done here)
         env_val, registration_enabled = _read_registration_from_env()
 
-    # Unused invite codes remain DB-backed
+
     invite_codes = []
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
