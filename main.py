@@ -3671,6 +3671,7 @@ def home():
       --halo-alpha:.18; --halo-blur:.80; --glow-mult:.80; --sweep-speed:.07;
       --shadow-lg: 0 24px 70px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
     }
+    /* Explicit light mode vars so mobile/light doesn't wash text out */
     @media (prefers-color-scheme: light){
       :root{
         --bg1:#eef2f7; --bg2:#e5edf9; --bg3:#dde7f6;
@@ -3688,6 +3689,7 @@ def home():
       font-family: 'Roboto', ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
       -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
       overflow-x:hidden;
+      background-color: var(--bg1); /* solid fallback behind gradients */
     }
 
     /* Soft nebula (disabled on small screens to save battery) */
@@ -3740,6 +3742,7 @@ def home():
       background: linear-gradient(90deg,#e7f3ff, color-mix(in oklab, var(--accent) 60%, #bfe3ff), #e7f3ff);
       -webkit-background-clip:text; -webkit-text-fill-color:transparent;
     }
+    /* Darker title in light mode so it doesn't look white-on-white on phones */
     @media (prefers-color-scheme: light){
       .hero-title{
         background: linear-gradient(90deg,#19324a, color-mix(in oklab, var(--accent) 52%, #1e4466), #19324a);
@@ -3769,12 +3772,13 @@ def home():
       border:1px solid var(--stroke); overflow:hidden; box-shadow: var(--shadow-lg);
       perspective: 1500px; transform-style: preserve-3d;
       aspect-ratio: 1 / 1;
-      min-height: clamp(300px, 48vw, 560px); /* increased to avoid cropping */
+      min-height: clamp(320px, 50vw, 600px); /* a bit taller to avoid clipping on big screens */
       will-change: transform;
     }
     @media (max-width: 768px){ .wheel-panel{ min-height: clamp(260px, 60vw, 460px) } }
 
-    .wheel-hud{ position:absolute; inset:14px; border-radius:inherit; display:grid; place-items:center; }
+    /* Bigger inset so canvas has breathing room inside rounded container */
+    .wheel-hud{ position:absolute; inset: clamp(16px, 2.6vw, 28px); border-radius:inherit; display:grid; place-items:center; }
     canvas#wheelCanvas{ width:100%; height:100%; display:block; }
 
     .wheel-halo{
@@ -4070,8 +4074,8 @@ const breath = new BreathEngine();
 
 /* =====================
    Risk Wheel (2D canvas)
-   - background cached
-   - DPI-aware padding to prevent edge cut-off
+   - cached background
+   - DPI-aware padding to prevent right-edge cut-off
 ====================== */
 class RiskWheel {
   constructor(canvas){
@@ -4080,7 +4084,7 @@ class RiskWheel {
     this.value = 0.0; this.target=0.0; this.vel=0.0;
     this.spring = prefersReduced ? 1.0 : (PERF_LOW ? 0.10 : 0.12);
     this._bgCache = null;
-    this._thicknessRatio = 0.38; // arc thickness relative to outer radius
+    this._thicknessRatio = 0.36; // a touch thinner -> more inner clearance
     this.resize = this.resize.bind(this);
     new ResizeObserver(this.resize).observe(this.c);
     const panel = document.getElementById('wheelPanel');
@@ -4095,31 +4099,34 @@ class RiskWheel {
     if (h < 2) h = w;
     const s = Math.max(1, Math.min(w, h));
     const px = this.pixelRatio;
-    this.c.width = Math.round(s * px); this.c.height = Math.round(s * px);
+    this.c.width  = Math.round(s * px);
+    this.c.height = Math.round(s * px);
     this._buildBackground();
     this._draw(0); // single draw
   }
   _buildBackground(){
     const W=this.c.width, H=this.c.height;
     if(!W || !H) return;
+
     const off = document.createElement('canvas');
     off.width=W; off.height=H;
     const ctx=off.getContext('2d');
 
-    const margin = Math.ceil(this.pixelRatio*3) + 2; // DPI-aware padding
-    const R = Math.min(W,H)/2 - margin;
+    // Safe padding = DPI-aware + a few physical pixels
+    const pad = Math.max(10 * this.pixelRatio, 18);
+    const R = Math.min(W,H)/2 - pad;
     const inner = R*(1 - this._thicknessRatio);
     const midR = (R + inner)/2;
     const lw = (R-inner);
 
     ctx.save(); ctx.translate(W/2,H/2); ctx.rotate(-Math.PI/2);
     ctx.lineWidth = lw;
-    ctx.lineCap = 'round';
+    ctx.lineCap   = 'round';   // smoother ends
     ctx.strokeStyle='#ffffff16';
     ctx.beginPath(); ctx.arc(0,0,midR, 0, Math.PI*2); ctx.stroke();
     ctx.restore();
 
-    this._bgCache = {canvas: off, R, inner, midR, lw, margin};
+    this._bgCache = {canvas: off, R, inner, midR, lw, pad};
   }
   tick(){
     const d = this.target - this.value;
@@ -4131,20 +4138,19 @@ class RiskWheel {
     const ctx=this.ctx, W=this.c.width, H=this.c.height;
     if (!W || !H) return;
 
-    // draw cached background
+    // cached background
     if(this._bgCache){
       ctx.clearRect(0,0,W,H);
       ctx.drawImage(this._bgCache.canvas, 0, 0);
     }
 
-    // pull geometry
     const R = this._bgCache?.R || Math.min(W,H)*0.46;
-    const inner = this._bgCache?.inner || R*0.62;
+    const inner = this._bgCache?.inner || R*0.64;
     const midR = this._bgCache?.midR || (R+inner)/2;
 
     ctx.save(); ctx.translate(W/2,H/2); ctx.rotate(-Math.PI/2);
     ctx.lineWidth = (R-inner);
-    ctx.lineCap = 'butt';
+    ctx.lineCap   = 'round';
 
     // dynamic arc
     const p=clamp01(this.value), maxAng=p*Math.PI*2;
@@ -4154,7 +4160,7 @@ class RiskWheel {
 
     for(let i=0;i<segs;i++){
       const t0=i/segs; if(t0>=p) break;
-      const a0=t0*maxAng, a1=((i+1)/segs)*maxAng - 0.0005; // tiny gap avoids antialias seams
+      const a0=t0*maxAng, a1=((i+1)/segs)*maxAng - 0.0006; // tiny gap avoids seams
       ctx.beginPath();
       ctx.strokeStyle = this._colorAt(t0);
       ctx.arc(0,0,midR, a0, a1);
@@ -4205,7 +4211,6 @@ const current = { harm:0, last:null, label:'INITIALIZING' };
 const smooth = { ema: null, alphaBase: 0.35, hysteresis: 0.03 };
 
 function labelWithHysteresis(pct){
-  // Avoid label flapping near thresholds using +/- hysteresis
   const tLow=40, tHigh=75, h=smooth.hysteresis*100;
   const prev=current.label || 'LOW';
   if(prev==='LOW'){
@@ -4215,7 +4220,7 @@ function labelWithHysteresis(pct){
     if(pct >= tHigh + h) return 'HIGH';
     if(pct <= tLow - h) return 'LOW';
     return 'MODERATE';
-  }else{ // HIGH
+  }else{
     if(pct < tHigh - h) return (pct <= tLow ? 'LOW' : 'MODERATE');
     return 'HIGH';
   }
@@ -4223,7 +4228,6 @@ function labelWithHysteresis(pct){
 
 function setHUD(j){
   const pctRaw = clamp01(j.harm_ratio||0)*100;
-  // EMA smoothing with confidence-aware alpha
   const conf = clamp01(j.confidence==null ? 0.6 : j.confidence);
   const alpha = Math.min(0.8, Math.max(0.15, smooth.alphaBase * (0.5 + 0.7*conf)));
   smooth.ema = (smooth.ema==null) ? pctRaw : (smooth.ema*(1-alpha) + pctRaw*alpha);
@@ -4291,7 +4295,7 @@ async function fetchJson(url){ try{ const r=await fetch(url, {credentials:'same-
   try{
     const es = new EventSource('/api/risk/stream');
     es.onmessage = ev=>{
-      if(Date.now() - lastApplyAt < MIN_UPDATE_MS) return; // avoid extra JSON parse if we won't apply
+      if(Date.now() - lastApplyAt < MIN_UPDATE_MS) return;
       try{ const j=JSON.parse(ev.data); applyReading(j); }catch(_){}
     };
     es.onerror = ()=>{ es.close(); };
