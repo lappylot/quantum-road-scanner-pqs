@@ -3914,6 +3914,8 @@ def home():
             <span class="pill">Source</span>
             <div class="seg" role="tablist" aria-label="Risk source">
               <button id="btnGuess" role="tab" aria-selected="true" aria-pressed="true" title="No destination; PSUTIL pulse only">LLM Guess</button>
+              <button id="btnRoute" role="tab" aria-selected="false" aria-pressed="false">LLM Route</button>
+              <button id="btnHybrid" role="tab" aria-selected="false" aria-pressed="false" title="Blend Guess+Route if both available">Hybrid</button>
             </div>
             <button id="btnRefresh" class="btn btn-sm btn-outline-light">Refresh</button>
             <button id="btnAuto" class="btn btn-sm btn-outline-light" aria-pressed="true">Auto: On</button>
