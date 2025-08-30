@@ -3860,7 +3860,7 @@ def home():
         </div>
       </div>
 
-      <p class="meta mt-3 text-center">QRS Utilizes Advanced AI/Quantum Simulations To Map Your Real World Risk.</p>
+      <p class="meta mt-3 text-center">QRS Utilizes Advanced AI and Quantum Simulations To Map Real World Road Risk.</p>
     </section>
 
     <!-- CONTROLS + EXPLAINER -->
