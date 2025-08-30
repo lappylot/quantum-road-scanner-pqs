@@ -4541,21 +4541,6 @@ def home():
 </html>
     """, seed_hex=seed_hex, seed_code=seed_code)
 
-ndow)) return;
-    try{
-      const es = new EventSource('/api/risk/stream');
-      es.onmessage = ev=>{ try{ const j=JSON.parse(ev.data); applyReading(j); }catch(_){} };
-      es.onerror = ()=>{ es.close(); };
-    }catch(e){}
-  })();
-
-  // Boot
-  toggleSeg('guess'); startAuto();
-  </script>
-</body>
-</html>
-    """, seed_hex=seed_hex, seed_code=seed_code)
-
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
