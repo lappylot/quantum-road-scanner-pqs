@@ -3829,7 +3829,7 @@ def home():
     <!-- HERO -->
     <section class="hero p-4 p-md-5 mb-4">
       <div class="hero-content">
-        <h1 class="hero-title">QRS's Risk Colorwheel To Map out Your Road Risk</h1>
+        <h1 class="hero-title">A Simple Colorwheel To Map Out Live Road Risk</h1>
         <p class="lead-soft">
           Meet your AI powered road risk scanner. Our technology blends key risk signals into a single colorized score.
           A smooth scale from calm green → caution amber → alert red.
@@ -3860,7 +3860,7 @@ def home():
         </div>
       </div>
 
-      <p class="meta mt-3 text-center">Tip: if your device has “Reduce Motion”, animations automatically calm down.</p>
+      <p class="meta mt-3 text-center">QRS Utilizes Advanced AI/Quantum Simulations To Map Your Real World Risk.</p>
     </section>
 
     <!-- CONTROLS + EXPLAINER -->
