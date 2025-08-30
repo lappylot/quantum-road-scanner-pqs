@@ -3829,12 +3829,12 @@ def home():
     <!-- HERO -->
     <section class="hero p-4 p-md-5 mb-4">
       <div class="hero-content">
-        <h1 class="hero-title">Risk Colorwheel — Perceptual, Personal, Live</h1>
+        <h1 class="hero-title">QRS's Risk Colorwheel To Map out Your Road Risk</h1>
         <p class="lead-soft">
-          Meet your road risk dial. It blends key signals into a single score:
-          a smooth scale from calm green → caution amber → alert red.
-          We check for changes and update automatically.
-          The dial’s gentle breathing slows when things look calm and quickens when risk rises.
+          Meet your AI powered road risk scanner. Our technology blends key risk signals into a single colorized score.
+          A smooth scale from calm green → caution amber → alert red.
+          Please drive responsibly.
+          <br></br>
         </p>
         <div class="d-flex flex-wrap align-items-center hero-cta">
           <a class="btn cta" href="{{ url_for('dashboard') }}">Open Dashboard</a>
