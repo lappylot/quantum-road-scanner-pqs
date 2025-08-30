@@ -2594,7 +2594,7 @@ def _call_llm(prompt: str):
     if not client:
         return None
 
-    model = os.environ.get("OPENAI_MODEL", "gpt-4o")
+    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
