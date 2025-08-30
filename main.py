@@ -3870,7 +3870,7 @@ def home():
           <div class="text-center">
             <h3 class="mb-2">How it works</h3>
             <p class="meta mx-auto" style="max-width:60ch">
-              We combine multiple signals into one easy score and smooth out noise so the dial doesn’t jump.
+              We combine multiple signals into one easy score.
               No switches or forms—just live updates.
             </p>
             <div class="d-flex flex-wrap align-items-center justify-content-center mt-3" style="gap:.7rem">
