@@ -3670,8 +3670,12 @@ def home():
       --radius:18px;
       --halo-alpha:.18; --halo-blur:.80; --glow-mult:.80; --sweep-speed:.07;
       --shadow-lg: 0 24px 70px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
+
+      /* extra-safe right inset to avoid cut-off on large desktop */
+      --hud-inset-tb: clamp(18px, 2.6vw, 32px);
+      --hud-inset-l:  clamp(18px, 2.6vw, 32px);
+      --hud-inset-r:  clamp(26px, 3.6vw, 46px); /* a bit more on the right */
     }
-    /* Explicit light mode vars so mobile/light doesn't wash text out */
     @media (prefers-color-scheme: light){
       :root{
         --bg1:#eef2f7; --bg2:#e5edf9; --bg3:#dde7f6;
@@ -3689,10 +3693,9 @@ def home():
       font-family: 'Roboto', ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
       -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
       overflow-x:hidden;
-      background-color: var(--bg1); /* solid fallback behind gradients */
+      background-color: var(--bg1);
     }
 
-    /* Soft nebula (disabled on small screens to save battery) */
     .nebula{
       position:fixed; inset:-12vh -12vw; pointer-events:none; z-index:-1;
       background:
@@ -3714,7 +3717,6 @@ def home():
     }
     .navbar-brand{ font-family:'Orbitron',sans-serif; letter-spacing:.5px; }
 
-    /* Hero card */
     .hero{
       position:relative; border-radius:calc(var(--radius) + 10px);
       background: color-mix(in oklab, var(--glass) 94%, transparent);
@@ -3742,7 +3744,6 @@ def home():
       background: linear-gradient(90deg,#e7f3ff, color-mix(in oklab, var(--accent) 60%, #bfe3ff), #e7f3ff);
       -webkit-background-clip:text; -webkit-text-fill-color:transparent;
     }
-    /* Darker title in light mode so it doesn't look white-on-white on phones */
     @media (prefers-color-scheme: light){
       .hero-title{
         background: linear-gradient(90deg,#19324a, color-mix(in oklab, var(--accent) 52%, #1e4466), #19324a);
@@ -3762,7 +3763,6 @@ def home():
       contain: layout paint;
     }
 
-    /* Wheel layout */
     .wheel-wrap{ display:grid; grid-template-columns: minmax(320px,1.1fr) minmax(320px,1fr); gap:26px; align-items:stretch }
     @media(max-width: 992px){ .wheel-wrap{ grid-template-columns: 1fr } }
 
@@ -3772,18 +3772,23 @@ def home():
       border:1px solid var(--stroke); overflow:hidden; box-shadow: var(--shadow-lg);
       perspective: 1500px; transform-style: preserve-3d;
       aspect-ratio: 1 / 1;
-      min-height: clamp(320px, 50vw, 600px); /* a bit taller to avoid clipping on big screens */
+      min-height: clamp(320px, 50vw, 620px);
       will-change: transform;
+      box-sizing: border-box;
     }
     @media (max-width: 768px){ .wheel-panel{ min-height: clamp(260px, 60vw, 460px) } }
 
-    /* Bigger inset so canvas has breathing room inside rounded container */
-    .wheel-hud{ position:absolute; inset: clamp(16px, 2.6vw, 28px); border-radius:inherit; display:grid; place-items:center; }
-    canvas#wheelCanvas{ width:100%; height:100%; display:block; }
-
-    .wheel-halo{
-      position:absolute; inset:0; display:grid; place-items:center; pointer-events:none;
+    /* asymmetric inset: a touch more on the right to guarantee clearance */
+    .wheel-hud{
+      position:absolute;
+      top: var(--hud-inset-tb); bottom: var(--hud-inset-tb);
+      left: var(--hud-inset-l);  right: var(--hud-inset-r);
+      border-radius:inherit; display:grid; place-items:center;
+      contain: strict;
     }
+    canvas#wheelCanvas{ width:100%; height:100%; display:block; contain: strict; }
+
+    .wheel-halo{ position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; }
     .wheel-halo .halo{
       width:min(70%, 420px); aspect-ratio:1; border-radius:50%;
       filter: blur(calc(22px * var(--halo-blur, .80))) saturate(108%);
@@ -3794,7 +3799,7 @@ def home():
         transparent 66%);
       transition: filter .25s ease, opacity .25s ease;
     }
-    @media (max-width: 768px){ .wheel-halo{ display:none } } /* save GPU on phones */
+    @media (max-width: 768px){ .wheel-halo{ display:none } }
 
     .hud-center{ position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; text-align:center }
     .hud-ring{
@@ -3802,8 +3807,7 @@ def home():
       background: radial-gradient(48% 48% at 50% 50%, #ffffff22, #ffffff05 60%, transparent 62%),
                   conic-gradient(from 140deg, #ffffff13, #ffffff05 65%, #ffffff13);
       filter:saturate(106%);
-      box-shadow: 0 0 calc(18px * var(--glow-mult, .80))
-                  color-mix(in srgb, var(--accent) 30%, transparent);
+      box-shadow: 0 0 calc(18px * var(--glow-mult, .80)) color-mix(in srgb, var(--accent) 30%, transparent);
     }
     .hud-number{
       font-size: clamp(2.3rem, 5.2vw, 3.6rem); font-weight:900; letter-spacing:-.02em;
@@ -3971,9 +3975,7 @@ _rafId = requestAnimationFrame(rafLoop);
 
 // Pause when not visible / tab hidden
 const visTarget = document.getElementById('wheelPanel') || document.body;
-new IntersectionObserver((entries)=>{
-  _visible = entries.some(e=>e.isIntersecting);
-}, {threshold: 0.05}).observe(visTarget);
+new IntersectionObserver((entries)=>{ _visible = entries.some(e=>e.isIntersecting); }, {threshold: 0.05}).observe(visTarget);
 document.addEventListener('visibilitychange', ()=>{ _visible = !document.hidden; }, {passive:true});
 
 /* =====================
@@ -4017,10 +4019,7 @@ let lastApplyAt = 0;
 (function parallax(){
   const panel = $('#wheelPanel'); if(!panel || isSmallScreen || prefersReduced) return;
   let rx=0, ry=0, raf=null, active=false;
-  function render(){
-    raf=null;
-    panel.style.transform = `rotateX(${ry}deg) rotateY(${rx}deg)`;
-  }
+  function render(){ raf=null; panel.style.transform = `rotateX(${ry}deg) rotateY(${rx}deg)`; }
   panel.addEventListener('pointerenter', ()=>{ active=true; }, {passive:true});
   panel.addEventListener('pointerleave', ()=>{ active=false; rx=ry=0; if(!raf) raf=requestAnimationFrame(render); }, {passive:true});
   panel.addEventListener('pointermove', e=>{
@@ -4074,8 +4073,6 @@ const breath = new BreathEngine();
 
 /* =====================
    Risk Wheel (2D canvas)
-   - cached background
-   - DPI-aware padding to prevent right-edge cut-off
 ====================== */
 class RiskWheel {
   constructor(canvas){
@@ -4084,7 +4081,7 @@ class RiskWheel {
     this.value = 0.0; this.target=0.0; this.vel=0.0;
     this.spring = prefersReduced ? 1.0 : (PERF_LOW ? 0.10 : 0.12);
     this._bgCache = null;
-    this._thicknessRatio = 0.36; // a touch thinner -> more inner clearance
+    this._thicknessRatio = 0.36;     // slightly thinner for extra clearance
     this.resize = this.resize.bind(this);
     new ResizeObserver(this.resize).observe(this.c);
     const panel = document.getElementById('wheelPanel');
@@ -4102,7 +4099,7 @@ class RiskWheel {
     this.c.width  = Math.round(s * px);
     this.c.height = Math.round(s * px);
     this._buildBackground();
-    this._draw(0); // single draw
+    this._draw(0);
   }
   _buildBackground(){
     const W=this.c.width, H=this.c.height;
@@ -4112,21 +4109,28 @@ class RiskWheel {
     off.width=W; off.height=H;
     const ctx=off.getContext('2d');
 
-    // Safe padding = DPI-aware + a few physical pixels
-    const pad = Math.max(10 * this.pixelRatio, 18);
-    const R = Math.min(W,H)/2 - pad;
-    const inner = R*(1 - this._thicknessRatio);
+    /* SAFE PAD
+       - 6% of size + DPI cushion
+       - ensures outer stroke & sweep never touch canvas edge
+    */
+    const sizeMin = Math.min(W,H);
+    const pad = Math.max(Math.round(sizeMin * 0.06), Math.round(22 * this.pixelRatio));
+
+    const R = sizeMin/2 - pad;
+    const inner = Math.max(2, R*(1 - this._thicknessRatio));
     const midR = (R + inner)/2;
     const lw = (R-inner);
 
     ctx.save(); ctx.translate(W/2,H/2); ctx.rotate(-Math.PI/2);
     ctx.lineWidth = lw;
-    ctx.lineCap   = 'round';   // smoother ends
+    ctx.lineCap   = 'round';
+    ctx.lineJoin  = 'round';
+    ctx.miterLimit= 2;
     ctx.strokeStyle='#ffffff16';
     ctx.beginPath(); ctx.arc(0,0,midR, 0, Math.PI*2); ctx.stroke();
     ctx.restore();
 
-    this._bgCache = {canvas: off, R, inner, midR, lw, pad};
+    this._bgCache = {canvas: off, R, inner, midR, lw};
   }
   tick(){
     const d = this.target - this.value;
@@ -4138,21 +4142,19 @@ class RiskWheel {
     const ctx=this.ctx, W=this.c.width, H=this.c.height;
     if (!W || !H) return;
 
-    // cached background
-    if(this._bgCache){
-      ctx.clearRect(0,0,W,H);
-      ctx.drawImage(this._bgCache.canvas, 0, 0);
-    }
+    ctx.clearRect(0,0,W,H);
+    if(this._bgCache) ctx.drawImage(this._bgCache.canvas, 0, 0);
 
     const R = this._bgCache?.R || Math.min(W,H)*0.46;
     const inner = this._bgCache?.inner || R*0.64;
     const midR = this._bgCache?.midR || (R+inner)/2;
+    const lw = this._bgCache?.lw || (R-inner);
 
     ctx.save(); ctx.translate(W/2,H/2); ctx.rotate(-Math.PI/2);
-    ctx.lineWidth = (R-inner);
+    ctx.lineWidth = lw;
     ctx.lineCap   = 'round';
+    ctx.lineJoin  = 'round';
 
-    // dynamic arc
     const p=clamp01(this.value), maxAng=p*Math.PI*2;
     const baseSegs = PERF_LOW ? 72 : 132;
     const sizeAdj = Math.max(0.85, Math.min(1.35, Math.sqrt(Math.min(W,H)/520)));
@@ -4160,19 +4162,18 @@ class RiskWheel {
 
     for(let i=0;i<segs;i++){
       const t0=i/segs; if(t0>=p) break;
-      const a0=t0*maxAng, a1=((i+1)/segs)*maxAng - 0.0006; // tiny gap avoids seams
+      const a0=t0*maxAng, a1=((i+1)/segs)*maxAng - 0.0006;
       ctx.beginPath();
       ctx.strokeStyle = this._colorAt(t0);
       ctx.arc(0,0,midR, a0, a1);
       ctx.stroke();
     }
 
-    // sweep dot (skip on low perf)
     if(!PERF_LOW){
       const sweepHz = breath.sweep || 0.07;
       const sweepAng = (t * sweepHz) % (Math.PI*2);
       ctx.save(); ctx.rotate(sweepAng);
-      const dotR = Math.max(4, (R-inner)*0.20);
+      const dotR = Math.max(4, lw*0.20);
       const grad = ctx.createRadialGradient(midR,0, 2, midR,0, dotR);
       grad.addColorStop(0, 'rgba(255,255,255,.90)');
       grad.addColorStop(1, 'rgba(255,255,255,0)');
@@ -4206,7 +4207,6 @@ const hudNumber=$('#hudNumber'), hudLabel=$('#hudLabel'), hudNote=$('#hudNote');
 const reasonsList=$('#reasonsList'), confidencePill=$('#confidencePill'), debugBox=$('#debugBox');
 const btnRefresh=$('#btnRefresh'), btnAuto=$('#btnAuto'), btnDebug=$('#btnDebug');
 
-// state
 const current = { harm:0, last:null, label:'INITIALIZING' };
 const smooth = { ema: null, alphaBase: 0.35, hysteresis: 0.03 };
 
@@ -4310,6 +4310,7 @@ startAuto();
 </body>
 </html>
     """, seed_hex=seed_hex, seed_code=seed_code)
+
 
 
 @app.route('/login', methods=['GET', 'POST'])
