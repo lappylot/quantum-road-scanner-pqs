@@ -3833,7 +3833,8 @@ def home():
         <p class="lead-soft">
           Meet your AI powered road risk scanner. Our technology blends key risk signals into a single colorized score.
           Our Colorwheel system displays a scale from calm green → caution amber → alert red, all depending upon real world risk.
-          Please drive responsibly.
+          Please drive responsibly. AI risk readings are a beta simulation and can be wrong especially if driving
+                                   patterns change due to lower risk readings.
           <br></br>
         </p>
         <div class="d-flex flex-wrap align-items-center hero-cta">
