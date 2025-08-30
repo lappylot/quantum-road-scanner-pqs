@@ -3704,143 +3704,272 @@ def home():
     @media (prefers-color-scheme: light){
       :root{ --bg1:#eef2f7; --bg2:#e5edf9; --bg3:#dde7f6; --ink:#0b1726; --sub:#37536e; --muted:#5a7b97; --glass:#00000010; --stroke:#00000018; }
     }
-    html,body{height:100%}
+    html, body { height:100%; }
     body{
       background:
         radial-gradient(1200px 700px at 10% -20%, color-mix(in oklab, var(--accent) 9%, var(--bg2)), var(--bg1) 58%),
         radial-gradient(1200px 900px at 120% -20%, color-mix(in oklab, var(--accent) 12%, transparent), transparent 62%),
         linear-gradient(135deg, var(--bg1), var(--bg2) 45%, var(--bg1));
-      color:var(--ink);
+      color: var(--ink);
       font-family: 'Roboto', ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
-      -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
-      overflow-x:hidden;
+      -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+      overflow-x: hidden;
     }
 
     /* Soft nebula */
     .nebula{
-      position:fixed; inset:-12vh -12vw; pointer-events:none; z-index:-1;
+      position: fixed;
+      inset: -12vh -12vw;
+      pointer-events: none;
+      z-index: -1;
       background:
         radial-gradient(600px 320px at 20% 10%, color-mix(in oklab, var(--accent) 18%, transparent), transparent 65%),
         radial-gradient(800px 400px at 85% 12%, color-mix(in oklab, var(--accent) 13%, transparent), transparent 70%),
-        radial-gradient(1200px 600px at 50% -10%, #ffffff10, #0000 60%);
+        radial-gradient(1200px 600px at 50% -10%, #ffffff10, transparent 60%);
       animation: drift 30s ease-in-out infinite alternate;
-      filter:saturate(120%);
+      filter: saturate(120%);
     }
-    @keyframes drift{ from{transform:translateY(-0.5%) scale(1.02)} to{transform:translateY(1.2%) scale(1)} }
+    @keyframes drift {
+      from { transform: translateY(-0.5%) scale(1.02); }
+      to { transform: translateY(1.2%) scale(1); }
+    }
 
-    .navbar{
+    .navbar {
       background: color-mix(in srgb, #000 62%, transparent);
       backdrop-filter: saturate(140%) blur(10px);
       -webkit-backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--stroke);
     }
-    .navbar-brand{ font-family:'Orbitron',sans-serif; letter-spacing:.5px; }
+    .navbar-brand { font-family: 'Orbitron', sans-serif; letter-spacing: .5px; }
 
     /* Hero card */
-    .hero{
-      position:relative; border-radius:calc(var(--radius) + 10px);
+    .hero {
+      position: relative;
+      border-radius: calc(var(--radius) + 10px);
       background: color-mix(in oklab, var(--glass) 96%, transparent);
       border: 1px solid var(--stroke);
       box-shadow: var(--shadow-lg);
-      overflow:hidden;
+      overflow: hidden;
     }
-    .hero::after{
-      content:""; position:absolute; inset:-35%;
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: -35%;
       background:
         radial-gradient(40% 24% at 20% 10%, color-mix(in oklab, var(--accent) 32%, transparent), transparent 60%),
         radial-gradient(30% 18% at 90% 0%, color-mix(in oklab, var(--accent) 18%, transparent), transparent 65%);
-      filter: blur(36px); opacity:.44; pointer-events:none;
+      filter: blur(36px);
+      opacity: .44;
+      pointer-events: none;
       animation: hueFlow 16s ease-in-out infinite alternate;
     }
-    @keyframes hueFlow{ from{transform:translateY(-2%) rotate(0.3deg)} to{transform:translateY(1.6%) rotate(-0.3deg)} }
-
-    .hero-title{
-      font-family:'Orbitron',sans-serif; font-weight:900; line-height:1.035; letter-spacing:.25px;
-      background: linear-gradient(90deg,#e7f3ff, color-mix(in oklab, var(--accent) 60%, #bfe3ff), #e7f3ff);
-      -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+    @keyframes hueFlow {
+      from { transform: translateY(-2%) rotate(0.3deg); }
+      to { transform: translateY(1.6%) rotate(-0.3deg); }
     }
-    .lead-soft{ color:var(--sub); font-size:1.06rem }
 
-    .card-g{
+    .hero-title {
+      font-family: 'Orbitron', sans-serif;
+      font-weight: 900;
+      line-height: 1.035;
+      letter-spacing: .25px;
+      background: linear-gradient(90deg, #e7f3ff, color-mix(in oklab, var(--accent) 60%, #bfe3ff), #e7f3ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .lead-soft { color: var(--sub); font-size: 1.06rem; }
+
+    .card-g {
       background: color-mix(in oklab, var(--glass) 94%, transparent);
-      border:1px solid var(--stroke); border-radius: var(--radius); box-shadow: var(--shadow-lg);
+      border: 1px solid var(--stroke);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-lg);
     }
 
     /* Wheel layout */
-    .wheel-wrap{ display:grid; grid-template-columns: minmax(320px,1.1fr) minmax(320px,1fr); gap:26px; align-items:stretch }
-    @media(max-width: 992px){ .wheel-wrap{ grid-template-columns: 1fr } }
+    .wheel-wrap {
+      display: grid;
+      grid-template-columns: minmax(320px,1.1fr) minmax(320px,1fr);
+      gap: 26px;
+      align-items: stretch;
+    }
+    @media (max-width: 992px) {
+      .wheel-wrap { grid-template-columns: 1fr; }
+    }
 
-    .wheel-panel{
-      position:relative; border-radius: calc(var(--radius) + 10px);
+    .wheel-panel {
+      position: relative;
+      border-radius: calc(var(--radius) + 10px);
       background: linear-gradient(180deg, #ffffff10, #0000001c);
-      border:1px solid var(--stroke); overflow:hidden; box-shadow: var(--shadow-lg);
-      perspective: 1500px; transform-style: preserve-3d;
-
-      /* 🔧 make sure the container has height so the canvas can size */
+      border: 1px solid var(--stroke);
+      overflow: hidden;
+      box-shadow: var(--shadow-lg);
+      perspective: 1500px;
+      transform-style: preserve-3d;
+      /* Ensure container has height */
       aspect-ratio: 1 / 1;
       min-height: clamp(300px, 42vw, 520px);
     }
-    .wheel-hud{ position:absolute; inset:14px; border-radius:inherit; display:grid; place-items:center; }
-    canvas#wheelCanvas{ width:100%; height:100%; display:block; }
-
-    .wheel-halo{
-      position:absolute; inset:0; display:grid; place-items:center; pointer-events:none;
+    .wheel-hud {
+      position: absolute;
+      inset: 14px;
+      border-radius: inherit;
+      display: grid;
+      place-items: center;
     }
-    .wheel-halo .halo{
-      width:min(70%, 420px); aspect-ratio:1; border-radius:50%;
+    canvas#wheelCanvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .wheel-halo {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      pointer-events: none;
+    }
+    .wheel-halo .halo {
+      width: min(70%, 420px);
+      aspect-ratio: 1;
+      border-radius: 50%;
       filter: blur(calc(30px * var(--halo-blur, .9))) saturate(112%);
       opacity: var(--halo-alpha, .32);
-      background: radial-gradient(50% 50% at 50% 50%,
-        color-mix(in oklab, var(--accent) 75%, #fff) 0%,
-        color-mix(in oklab, var(--accent) 24%, transparent) 50%,
-        transparent 66%);
+      background: radial-gradient(50% 50% at 50% 50%, color-mix(in oklab, var(--accent) 75%, #fff) 0%, color-mix(in oklab, var(--accent) 24%, transparent) 50%, transparent 66%);
       transition: filter .25s ease, opacity .25s ease;
     }
 
-    .hud-center{ position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; text-align:center }
-    .hud-ring{
-      position:absolute; width:58%; aspect-ratio:1; border-radius:50%;
+    .hud-center {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      pointer-events: none;
+      text-align: center;
+    }
+    .hud-ring {
+      position: absolute;
+      width: 58%;
+      aspect-ratio: 1;
+      border-radius: 50%;
       background: radial-gradient(48% 48% at 50% 50%, #ffffff22, #ffffff05 60%, transparent 62%),
                   conic-gradient(from 140deg, #ffffff13, #ffffff05 65%, #ffffff13);
-      filter:saturate(110%);
+      filter: saturate(110%);
       box-shadow: 0 0 calc(22px * var(--glow-mult, .9))
-                  color-mix(in srgb, var(--accent) 35%, transparent);
+                  color-mix(in srgb, var(--accent) 30%, transparent);
     }
-    .hud-number{ font-size: clamp(2.3rem, 5.2vw, 3.6rem); font-weight:900; letter-spacing:-.02em;
+    .hud-number {
+      font-size: clamp(2.3rem, 5.2vw, 3.6rem);
+      font-weight: 900;
+      letter-spacing: -.02em;
       background: linear-gradient(180deg, #fff, color-mix(in oklab, var(--accent) 44%, #cfeaff));
-      -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
       text-shadow: 0 2px 24px color-mix(in srgb, var(--accent) 22%, transparent);
     }
-    .hud-label{ font-weight:800; color: color-mix(in oklab, var(--accent) 85%, #d8ecff);
-      text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; opacity:.95; }
-    .hud-note{ color:var(--muted); font-size:.95rem; max-width:26ch }
+    .hud-label {
+      font-weight: 800;
+      color: color-mix(in oklab, var(--accent) 85%, #d8ecff);
+      text-transform: uppercase;
+      letter-spacing: .12em;
+      font-size: .8rem;
+      opacity: .95;
+    }
+    .hud-note {
+      color: var(--muted);
+      font-size: .95rem;
+      max-width: 26ch;
+    }
 
-    .seg{ display:inline-flex; padding:6px; gap:2px; border-radius:999px; background:#ffffff12; border:1px solid var(--stroke) }
-    .seg button{ appearance:none; border:0; padding:.42rem .9rem; border-radius:999px; background:transparent; color:var(--ink); font-weight:700; font-size:.9rem }
-    .seg button[aria-pressed="true"]{ background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 38%, #ffffff26), #ffffff21);
-      box-shadow: inset 0 1px 0 #ffffff66, 0 0 0 2px #00000010; }
+    .seg {
+      display: inline-flex;
+      padding: 6px;
+      gap: 2px;
+      border-radius: 999px;
+      background: #ffffff12;
+      border: 1px solid var(--stroke);
+    }
+    .seg button {
+      appearance: none;
+      border: 0;
+      padding: .42rem .9rem;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--ink);
+      font-weight: 700;
+      font-size: .9rem;
+    }
+    .seg button[aria-pressed="true"] {
+      background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 38%, #ffffff26), #ffffff21);
+      box-shadow: inset 0 1px 0 #ffffff66, 0 0 0 2px #00000010;
+    }
 
-    .pill{ padding:.28rem .66rem; border-radius:999px; background:#ffffff18; border:1px solid var(--stroke); font-size:.85rem }
+    .pill {
+      padding: .28rem .66rem;
+      border-radius: 999px;
+      background: #ffffff18;
+      border: 1px solid var(--stroke);
+      font-size: .85rem;
+    }
 
-    .list-clean{margin:0; padding-left:1.2rem}
-    .list-clean li{ margin:.42rem 0; color:var(--sub) }
+    .list-clean {
+      margin: 0;
+      padding-left: 1.2rem;
+    }
+    .list-clean li {
+      margin: .42rem 0;
+      color: var(--sub);
+    }
 
-    .cta{
+    .cta {
       background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 70%, #7ae6ff),
                                            color-mix(in oklab, var(--accent) 50%, #2bd1ff));
-      color:#07121f; font-weight:900; border:0; padding:.85rem 1rem; border-radius:12px;
+      color: #07121f;
+      font-weight: 900;
+      border: 0;
+      padding: .85rem 1rem;
+      border-radius: 12px;
       box-shadow: 0 12px 24px color-mix(in srgb, var(--accent) 30%, transparent);
     }
 
-    .meta{ color:var(--sub); font-size:.95rem }
-    .debug{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.85rem; white-space:pre-wrap; max-height:220px; overflow:auto; background:#0000003a; border-radius:12px; padding:10px; border:1px dashed var(--stroke); }
+    .meta { color: var(--sub); font-size: .95rem; }
+    .debug {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .85rem;
+      white-space: pre-wrap;
+      max-height: 220px;
+      overflow: auto;
+      background: #0000003a;
+      border-radius: 12px;
+      padding: 10px;
+      border: 1px dashed var(--stroke);
+    }
+    
+    /* Improve mobile performance by reducing heavy animations */
+    @media (max-width: 768px) {
+      .nebula { display: none; }
+      .hero::after { animation: none; }
+      /* Optionally simplify canvas effects */
+      .wheel-halo .halo { filter: blur(12px); }
+    }
+    
+    /* Respect prefers-reduced-motion setting */
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        animation-duration: 0.001ms !important;
+        transition-duration: 0.001ms !important;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="nebula" aria-hidden="true"></div>
   <nav class="navbar navbar-expand-lg navbar-dark">
     <a class="navbar-brand" href="{{ url_for('home') }}">QRS+</a>
-    <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#nav"><span class="navbar-toggler-icon"></span></button>
+    <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#nav">
+      <span class="navbar-toggler-icon"></span>
+    </button>
     <div id="nav" class="collapse navbar-collapse justify-content-end">
       <ul class="navbar-nav">
         {% if 'username' in session %}
@@ -3878,7 +4007,9 @@ def home():
           <div class="wheel-panel" id="wheelPanel">
             <div class="wheel-hud">
               <canvas id="wheelCanvas"></canvas>
-              <div class="wheel-halo" aria-hidden="true"><div class="halo"></div></div>
+              <div class="wheel-halo" aria-hidden="true">
+                <div class="halo"></div>
+              </div>
               <div class="hud-center">
                 <div class="hud-ring"></div>
                 <div class="text-center">
@@ -3981,18 +4112,19 @@ def home():
   const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // enforce update cadence
-  const MIN_UPDATE_MS = 60 * 1000; // 🔒 only change once per minute
+  const MIN_UPDATE_MS = 60 * 1000;
   let lastApplyAt = 0;
 
   // current state
-  const current = { mode:'guess', harm:0, last:null };
+  const current = { mode: 'guess', harm: 0, last: null };
 
   (async function themeSync(){
-    try{
-      const r=await fetch('/api/theme/personalize', {credentials:'same-origin'});
-      const j=await r.json();
-      if(j?.hex) document.documentElement.style.setProperty('--accent', j.hex);
-    }catch(e){}
+    try {
+      const r = await fetch('/api/theme/personalize', { credentials: 'same-origin' });
+      const j = await r.json();
+      if(j?.hex)
+        document.documentElement.style.setProperty('--accent', j.hex);
+    } catch(e) {}
   })();
 
   /* =====================
@@ -4000,12 +4132,12 @@ def home():
   ====================== */
   (function ensureWheelSize(){
     const panel = document.getElementById('wheelPanel');
-    if(!panel) return;
+    if (!panel) return;
     function fit(){
       const w = panel.clientWidth || panel.offsetWidth || 0;
-      // only force height if the computed height is tiny (aspect-ratio unsupported or broken)
       const ch = parseFloat(getComputedStyle(panel).height) || 0;
-      if (ch < 24 && w > 0) panel.style.height = w + 'px';
+      if (ch < 24 && w > 0)
+        panel.style.height = w + 'px';
     }
     new ResizeObserver(fit).observe(panel);
     fit();
@@ -4015,22 +4147,23 @@ def home():
      parallax (subtle)
   ====================== */
   (function parallax(){
-    const panel = $('#wheelPanel'); if(!panel) return;
+    const panel = $('#wheelPanel'); if (!panel) return;
     let rx=0, ry=0, vx=0, vy=0;
-    const damp = prefersReduced? .18 : .08;
-    const update=()=>{
-      vx += (rx - vx)*damp; vy += (ry - vy)*damp;
+    const damp = prefersReduced ? .18 : .08;
+    const update = () => {
+      vx += (rx - vx) * damp;
+      vy += (ry - vy) * damp;
       panel.style.transform = `rotateX(${vy}deg) rotateY(${vx}deg)`;
       requestAnimationFrame(update);
     };
     update();
-    panel.addEventListener('pointermove', e=>{
-      const r=panel.getBoundingClientRect();
-      const nx = (e.clientX - r.left)/r.width*2 - 1;
-      const ny = (e.clientY - r.top)/r.height*2 - 1;
+    panel.addEventListener('pointermove', e => {
+      const r = panel.getBoundingClientRect();
+      const nx = (e.clientX - r.left) / r.width * 2 - 1;
+      const ny = (e.clientY - r.top) / r.height * 2 - 1;
       rx = ny * 3.5; ry = -nx * 3.5;
     });
-    panel.addEventListener('pointerleave', ()=>{ rx=0; ry=0; });
+    panel.addEventListener('pointerleave', () => { rx = 0; ry = 0; });
   })();
 
   /* =====================
@@ -4038,35 +4171,36 @@ def home():
   ====================== */
   class BreathEngine {
     constructor(){
-      this.rateHz = 0.10;  // ≈6 bpm baseline
-      this.amp    = 0.55;
-      this.sweep  = 0.12;
-      this._rateTarget=this.rateHz; this._ampTarget=this.amp; this._sweepTarget=this.sweep;
-      this.val    = 0.7;
+      this.rateHz = 0.10;
+      this.amp = 0.55;
+      this.sweep = 0.12;
+      this._rateTarget = this.rateHz;
+      this._ampTarget = this.amp;
+      this._sweepTarget = this.sweep;
+      this.val = 0.7;
     }
-    setFromRisk(risk, {confidence=1}={}){
-      risk = clamp01(risk||0); confidence = clamp01(confidence);
-      this._rateTarget = prefersReduced ? (0.05 + 0.03*risk) : (0.06 + 0.16*risk);
-      const baseAmp = prefersReduced ? (0.35 + 0.20*risk) : (0.35 + 0.55*risk);
-      this._ampTarget = baseAmp * (0.70 + 0.30*confidence);
-      this._sweepTarget = prefersReduced ? (0.06 + 0.06*risk) : (0.08 + 0.16*risk);
+    setFromRisk(risk, { confidence = 1 } = {}){
+      risk = clamp01(risk || 0);
+      confidence = clamp01(confidence);
+      this._rateTarget = prefersReduced ? (0.05 + 0.03 * risk) : (0.06 + 0.16 * risk);
+      const baseAmp = prefersReduced ? (0.35 + 0.20 * risk) : (0.35 + 0.55 * risk);
+      this._ampTarget = baseAmp * (0.70 + 0.30 * confidence);
+      this._sweepTarget = prefersReduced ? (0.06 + 0.06 * risk) : (0.08 + 0.16 * risk);
     }
     tick(){
-      const t = performance.now()/1000;
+      const t = performance.now() / 1000;
       const k = prefersReduced ? 0.08 : 0.18;
-      this.rateHz += (this._rateTarget - this.rateHz)*k;
-      this.amp    += (this._ampTarget  - this.amp   )*k;
-      this.sweep  += (this._sweepTarget- this.sweep )*k;
-
-      const base  = 0.5 + 0.5 * Math.sin(2*Math.PI*this.rateHz * t);
-      const depth = 0.85 + 0.15 * Math.sin(2*Math.PI*this.rateHz * 0.5 * t);
+      this.rateHz += (this._rateTarget - this.rateHz) * k;
+      this.amp += (this._ampTarget - this.amp) * k;
+      this.sweep += (this._sweepTarget - this.sweep) * k;
+      const base = 0.5 + 0.5 * Math.sin(2 * Math.PI * this.rateHz * t);
+      const depth = 0.85 + 0.15 * Math.sin(2 * Math.PI * this.rateHz * 0.5 * t);
       const tremorAmt = prefersReduced ? 0 : (Math.max(0, current.harm - 0.75) * 0.02);
-      const tremor = tremorAmt * Math.sin(2*Math.PI*8 * t);
-      this.val = 0.55 + this.amp*(base*depth - 0.5) + tremor;
-
-      document.documentElement.style.setProperty('--halo-alpha', (0.18 + 0.28*this.val).toFixed(3));
-      document.documentElement.style.setProperty('--halo-blur',  (0.60 + 0.80*this.val).toFixed(3));
-      document.documentElement.style.setProperty('--glow-mult',  (0.60 + 0.90*this.val).toFixed(3));
+      const tremor = tremorAmt * Math.sin(2 * Math.PI * 8 * t);
+      this.val = 0.55 + this.amp * (base * depth - 0.5) + tremor;
+      document.documentElement.style.setProperty('--halo-alpha', (0.18 + 0.28 * this.val).toFixed(3));
+      document.documentElement.style.setProperty('--halo-blur', (0.60 + 0.80 * this.val).toFixed(3));
+      document.documentElement.style.setProperty('--glow-mult', (0.60 + 0.90 * this.val).toFixed(3));
       document.documentElement.style.setProperty('--sweep-speed', this.sweep.toFixed(3));
     }
   }
@@ -4078,28 +4212,31 @@ def home():
   ====================== */
   class RiskWheel {
     constructor(canvas){
-      this.c = canvas; this.ctx = canvas.getContext('2d');
-      this.pixelRatio = Math.max(1, Math.min(2, devicePixelRatio||1));
-      this.value = 0.0; this.target=0.0; this.vel=0.0;
+      this.c = canvas;
+      this.ctx = canvas.getContext('2d');
+      this.pixelRatio = Math.max(1, Math.min(2, devicePixelRatio || 1));
+      this.value = 0.0;
+      this.target = 0.0;
+      this.vel = 0.0;
       this.spring = prefersReduced ? 1.0 : 0.12;
       this._resize = this._resize.bind(this);
       new ResizeObserver(this._resize).observe(this.c);
-      // also observe the panel so height/width changes trigger draws
       const panel = document.getElementById('wheelPanel');
       if (panel) new ResizeObserver(this._resize).observe(panel);
       this._resize();
-      this._tick = this._tick.bind(this); requestAnimationFrame(this._tick);
+      this._tick = this._tick.bind(this);
+      requestAnimationFrame(this._tick);
     }
     setTarget(x){ this.target = clamp01(x); }
     _resize(){
-      // robust sizing even if height reports as 0
       const panel = document.getElementById('wheelPanel');
-      const rect = (panel||this.c).getBoundingClientRect();
-      let w = rect.width||0, h = rect.height||0;
-      if (h < 2) h = w; // fall back to square if collapsed height
+      const rect = (panel || this.c).getBoundingClientRect();
+      let w = rect.width || 0, h = rect.height || 0;
+      if (h < 2) h = w;
       const s = Math.max(1, Math.min(w, h));
       const px = this.pixelRatio;
-      this.c.width = s * px; this.c.height = s * px;
+      this.c.width = s * px;
+      this.c.height = s * px;
       this._draw();
     }
     _tick(){
@@ -4110,94 +4247,107 @@ def home():
       requestAnimationFrame(this._tick);
     }
     _draw(){
-      const ctx=this.ctx, W=this.c.width, H=this.c.height;
+      const ctx = this.ctx, W = this.c.width, H = this.c.height;
       if (!W || !H) return;
-      ctx.clearRect(0,0,W,H);
-      const cx=W/2, cy=H/2, R=Math.min(W,H)*0.46, inner=R*0.62;
-
-      ctx.save(); ctx.translate(cx,cy); ctx.rotate(-Math.PI/2);
-      ctx.lineWidth = (R-inner);
-
-      // track
-      ctx.strokeStyle='#ffffff16';
-      ctx.beginPath(); ctx.arc(0,0,(R+inner)/2, 0, Math.PI*2); ctx.stroke();
-
-      // fill
-      const p=clamp01(this.value), maxAng=p*Math.PI*2, segs=220;
-      for(let i=0;i<segs;i++){
-        const t0=i/segs; if(t0>=p) break;
-        const a0=t0*maxAng, a1=((i+1)/segs)*maxAng;
+      ctx.clearRect(0, 0, W, H);
+      const cx = W/2, cy = H/2, R = Math.min(W, H)*0.46, inner = R*0.62;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(-Math.PI/2);
+      ctx.lineWidth = (R - inner);
+      ctx.strokeStyle = '#ffffff16';
+      ctx.beginPath();
+      ctx.arc(0, 0, (R + inner)/2, 0, Math.PI*2);
+      ctx.stroke();
+      const p = clamp01(this.value), maxAng = p * Math.PI * 2, segs = 220;
+      for (let i = 0; i < segs; i++){
+        const t0 = i / segs;
+        if(t0 >= p) break;
+        const a0 = t0 * maxAng, a1 = ((i + 1) / segs) * maxAng;
         ctx.beginPath();
         ctx.strokeStyle = this._colorAt(t0);
-        ctx.arc(0,0,(R+inner)/2, a0, a1);
+        ctx.arc(0, 0, (R + inner) / 2, a0, a1);
         ctx.stroke();
       }
-
-      // specular sweep
-      const sp = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sweep-speed')) || (prefersReduced? .04 : .12);
-      const t = performance.now()/1000;
-      const sweepAng = (t * sp) % (Math.PI*2);
-      ctx.save(); ctx.rotate(sweepAng);
-      const dotR = Math.max(4*this.pixelRatio, (R-inner)*0.22);
-      const grad = ctx.createRadialGradient((R+inner)/2,0, 2, (R+inner)/2,0, dotR);
+      const sp = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sweep-speed')) || (prefersReduced ? .04 : .12);
+      const t = performance.now() / 1000;
+      const sweepAng = (t * sp) % (Math.PI * 2);
+      ctx.save();
+      ctx.rotate(sweepAng);
+      const dotR = Math.max(4 * this.pixelRatio, (R - inner) * 0.22);
+      const grad = ctx.createRadialGradient((R + inner)/2, 0, 2, (R + inner)/2, 0, dotR);
       grad.addColorStop(0, 'rgba(255,255,255,.95)');
       grad.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = grad; ctx.beginPath();
-      ctx.arc((R+inner)/2,0, dotR, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc((R + inner)/2, 0, dotR, 0, Math.PI*2);
+      ctx.fill();
       ctx.restore();
-
       ctx.restore();
     }
-    _mix(h1,h2,k){
-      const a=parseInt(h1.slice(1),16), b=parseInt(h2.slice(1),16);
-      const r=(a>>16)&255, g=(a>>8)&255, bl=a&255;
-      const r2=(b>>16)&255, g2=(b>>8)&255, bl2=b&255;
-      const m=(x,y)=>Math.round(x+(y-x)*k);
-      return `#${m(r,r2).toString(16).padStart(2,'0')}${m(g,g2).toString(16).padStart(2,'0')}${m(bl,bl2).toString(16).padStart(2,'0')}`;
+    _mix(h1, h2, k){
+      const a = parseInt(h1.slice(1), 16), b = parseInt(h2.slice(1), 16);
+      const r = (a >> 16) & 255, g = (a >> 8) & 255, bl = a & 255;
+      const r2 = (b >> 16) & 255, g2 = (b >> 8) & 255, bl2 = b & 255;
+      const m = (x, y) => Math.round(x + (y - x) * k);
+      return `#${m(r, r2).toString(16).padStart(2, '0')}${m(g, g2).toString(16).padStart(2, '0')}${m(bl, bl2).toString(16).padStart(2, '0')}`;
     }
     _colorAt(t){
       const acc = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#49c2ff';
-      const green="#43d17a", amber="#f6c454", red="#ff6a6a";
-      const base = t<.4 ? this._mix(green, amber, t/.4) : this._mix(amber, red, (t-.4)/.6);
+      const green = "#43d17a", amber = "#f6c454", red = "#ff6a6a";
+      const base = t < .4 ? this._mix(green, amber, t/.4) : this._mix(amber, red, (t-.4)/.6);
       return this._mix(base, acc, 0.18);
     }
   }
-
-  /* =====================
-     Store + bindings
-  ====================== */
   const wheel = new RiskWheel(document.getElementById('wheelCanvas'));
-  const hudNumber=$('#hudNumber'), hudLabel=$('#hudLabel'), hudNote=$('#hudNote');
-  const reasonsList=$('#reasonsList'), confidencePill=$('#confidencePill'), debugBox=$('#debugBox');
-  const btnGuess=$('#btnGuess'), btnRoute=$('#btnRoute'), btnHybrid=$('#btnHybrid');
-  const btnRefresh=$('#btnRefresh'), btnAuto=$('#btnAuto'), btnDebug=$('#btnDebug');
-  const routeForm=$('#routeForm'), lat=$('#lat'), lon=$('#lon'), dlat=$('#dlat'), dlon=$('#dlon'), btnRouteFetch=$('#btnRouteFetch');
+  const hudNumber = $('#hudNumber'),
+        hudLabel = $('#hudLabel'),
+        hudNote = $('#hudNote'),
+        reasonsList = $('#reasonsList'),
+        confidencePill = $('#confidencePill'),
+        debugBox = $('#debugBox');
+  const btnGuess = $('#btnGuess'),
+        btnRoute = $('#btnRoute'),
+        btnHybrid = $('#btnHybrid'),
+        btnRefresh = $('#btnRefresh'),
+        btnAuto = $('#btnAuto'),
+        btnDebug = $('#btnDebug');
+  const routeForm = $('#routeForm'),
+        lat = $('#lat'),
+        lon = $('#lon'),
+        dlat = $('#dlat'),
+        dlon = $('#dlon'),
+        btnRouteFetch = $('#btnRouteFetch');
 
   function setHUD(j){
-    const pct = Math.round(clamp01(j.harm_ratio||0)*100);
+    const pct = Math.round(clamp01(j.harm_ratio || 0) * 100);
     hudNumber.textContent = pct + "%";
-    hudLabel.textContent = (j.label||"").toUpperCase() || (pct<40?"CLEAR":pct<75?"CHANGING":"ELEVATED");
-    hudNote.textContent  = j.blurb || (pct<40?"Looks good ahead":"Stay adaptive and scan");
-    if (j.color){ document.documentElement.style.setProperty('--accent', j.color); }
-    confidencePill.textContent = "Conf: " + (j.confidence!=null ? Math.round(clamp01(j.confidence)*100) : "--") + "%";
-    reasonsList.innerHTML="";
-    (Array.isArray(j.reasons)? j.reasons.slice(0,8):["Model is composing context…"]).forEach(x=>{
-      const li=document.createElement('li'); li.textContent=x; reasonsList.appendChild(li);
+    hudLabel.textContent = (j.label || "").toUpperCase() || (pct < 40 ? "CLEAR" : pct < 75 ? "CHANGING" : "ELEVATED");
+    hudNote.textContent  = j.blurb || (pct < 40 ? "Looks good ahead" : "Stay adaptive and scan");
+    if(j.color){
+      document.documentElement.style.setProperty('--accent', j.color);
+    }
+    confidencePill.textContent = "Conf: " + (j.confidence != null ? Math.round(clamp01(j.confidence) * 100) : "--") + "%";
+    reasonsList.innerHTML = "";
+    (Array.isArray(j.reasons) ? j.reasons.slice(0,8) : ["Model is composing context…"]).forEach(x => {
+      const li = document.createElement('li');
+      li.textContent = x;
+      reasonsList.appendChild(li);
     });
-    if (btnDebug.getAttribute('aria-pressed')==='true'){
+    if(btnDebug.getAttribute('aria-pressed') === 'true'){
       debugBox.textContent = JSON.stringify(j, null, 2);
     }
   }
 
   function applyReading(j){
-    if(!j || typeof j.harm_ratio!=='number') return;
+    if(!j || typeof j.harm_ratio !== 'number') return;
     const now = Date.now();
-    if (lastApplyAt && (now - lastApplyAt) < MIN_UPDATE_MS) return; // ⏱️ throttle to once per minute
+    if(lastApplyAt && (now - lastApplyAt) < MIN_UPDATE_MS) return;
     lastApplyAt = now;
-
-    current.last=j; current.harm = clamp01(j.harm_ratio);
+    current.last = j;
+    current.harm = clamp01(j.harm_ratio);
     wheel.setTarget(current.harm);
-    breath.setFromRisk(current.harm, {confidence: j.confidence});
+    breath.setFromRisk(current.harm, { confidence: j.confidence });
     setHUD(j);
   }
 
@@ -4205,93 +4355,120 @@ def home():
      controls & modes
   ====================== */
   function toggleSeg(m){
-    current.mode=m;
-    btnGuess.setAttribute('aria-pressed', m==='guess'); btnGuess.setAttribute('aria-selected', m==='guess');
-    btnRoute.setAttribute('aria-pressed', m==='route'); btnRoute.setAttribute('aria-selected', m==='route');
-    btnHybrid.setAttribute('aria-pressed', m==='hybrid'); btnHybrid.setAttribute('aria-selected', m==='hybrid');
-    routeForm.style.display = (m!=='guess')? '' : 'none';
+    current.mode = m;
+    btnGuess.setAttribute('aria-pressed', m==='guess');
+    btnGuess.setAttribute('aria-selected', m==='guess');
+    btnRoute.setAttribute('aria-pressed', m==='route');
+    btnRoute.setAttribute('aria-selected', m==='route');
+    btnHybrid.setAttribute('aria-pressed', m==='hybrid');
+    btnHybrid.setAttribute('aria-selected', m==='hybrid');
+    routeForm.style.display = (m !== 'guess') ? '' : 'none';
     fetchOnce();
   }
-  btnGuess.onclick = ()=>toggleSeg('guess');
-  btnRoute.onclick = ()=>toggleSeg('route');
-  btnHybrid.onclick= ()=>toggleSeg('hybrid');
+  btnGuess.onclick = () => toggleSeg('guess');
+  btnRoute.onclick = () => toggleSeg('route');
+  btnHybrid.onclick = () => toggleSeg('hybrid');
 
-  btnRefresh.onclick = ()=>fetchOnce();
-  btnAuto.onclick = ()=>{
-    if(autoTimer){ stopAuto(); } else { startAuto(); }
-  };
-  btnDebug.onclick = ()=>{
-    const cur=btnDebug.getAttribute('aria-pressed')==='true';
+  btnRefresh.onclick = () => fetchOnce();
+  btnAuto.onclick = () => { if(autoTimer){ stopAuto(); } else { startAuto(); } };
+  btnDebug.onclick = () => {
+    const cur = btnDebug.getAttribute('aria-pressed') === 'true';
     btnDebug.setAttribute('aria-pressed', !cur);
     btnDebug.textContent = "Debug: " + (!cur ? "On" : "Off");
     debugBox.style.display = !cur ? '' : 'none';
-    if(!cur && current.last) debugBox.textContent = JSON.stringify(current.last,null,2);
+    if(!cur && current.last)
+      debugBox.textContent = JSON.stringify(current.last, null, 2);
   };
+  btnRouteFetch.onclick = async (e) => { e.preventDefault(); await fetchRouteOnce(); };
 
-  btnRouteFetch.onclick = async (e)=>{ e.preventDefault(); await fetchRouteOnce(); };
-
-  let autoTimer=null;
-  function startAuto(){ stopAuto(); btnAuto.setAttribute('aria-pressed','true'); btnAuto.textContent="Auto: On"; fetchOnce(); autoTimer=setInterval(fetchOnce, 60*1000); }
-  function stopAuto(){ if(autoTimer) clearInterval(autoTimer); autoTimer=null; btnAuto.setAttribute('aria-pressed','false'); btnAuto.textContent="Auto: Off"; }
-
-  function isRouteFilled(){ return [lat.value,lon.value,dlat.value,dlon.value].every(v=>v && !isNaN(parseFloat(v))); }
-  function currentRoute(){ return { lat:parseFloat(lat.value), lon:parseFloat(lon.value), dest_lat:parseFloat(dlat.value), dest_lon:parseFloat(dlon.value) }; }
-
+  let autoTimer = null;
+  function startAuto(){
+    stopAuto();
+    btnAuto.setAttribute('aria-pressed', 'true');
+    btnAuto.textContent = "Auto: On";
+    fetchOnce();
+    autoTimer = setInterval(fetchOnce, 60*1000);
+  }
+  function stopAuto(){
+    if(autoTimer) clearInterval(autoTimer);
+    autoTimer = null;
+    btnAuto.setAttribute('aria-pressed', 'false');
+    btnAuto.textContent = "Auto: Off";
+  }
+  function isRouteFilled(){ return [lat.value, lon.value, dlat.value, dlon.value].every(v => v && !isNaN(parseFloat(v))); }
+  function currentRoute(){ return { lat: parseFloat(lat.value), lon: parseFloat(lon.value), dest_lat: parseFloat(dlat.value), dest_lon: parseFloat(dlon.value) }; }
   async function fetchOnce(){
-    if(current.mode==='guess') return fetchGuessOnce();
-    if(current.mode==='route') return fetchRouteOnce();
-    // hybrid
+    if(current.mode === 'guess') return fetchGuessOnce();
+    if(current.mode === 'route') return fetchRouteOnce();
     if(isRouteFilled()){
       const [g, r] = await Promise.allSettled([fetchJson('/api/risk/llm_guess'), postJson('/api/risk/llm_route', currentRoute())]);
-      const gj = g.status==='fulfilled'? g.value : null;
-      const rj = r.status==='fulfilled'? r.value : null;
-      const mix = blendReadings(gj, rj); applyReading(mix);
-    }else{
+      const gj = g.status === 'fulfilled' ? g.value : null;
+      const rj = r.status === 'fulfilled' ? r.value : null;
+      const mix = blendReadings(gj, rj);
+      applyReading(mix);
+    } else {
       return fetchGuessOnce();
     }
   }
-
   function blendReadings(a, b){
-    if(a && !b) return a; if(b && !a) return b; if(!a && !b) return null;
-    const ca = (a.confidence ?? 0.5), cb=(b.confidence ?? 0.5), tot = (ca+cb)||1;
-    const hr = ((a.harm_ratio??0)*ca + (b.harm_ratio??0)*cb)/tot;
-    const conf = Math.max(ca, cb)*0.9 + 0.05;
+    if(a && !b) return a;
+    if(b && !a) return b;
+    if(!a && !b) return null;
+    const ca = (a.confidence ?? 0.5), cb = (b.confidence ?? 0.5), tot = (ca+cb)||1;
+    const hr = ((a.harm_ratio ?? 0)*ca + (b.harm_ratio ?? 0)*cb) / tot;
+    const conf = Math.max(ca, cb) * 0.9 + 0.05;
     const reasons = [
-      ...(Array.isArray(a.reasons)? a.reasons.slice(0,3):[]),
-      ...(Array.isArray(b.reasons)? b.reasons.slice(0,3):[])
+      ...(Array.isArray(a.reasons) ? a.reasons.slice(0,3) : []),
+      ...(Array.isArray(b.reasons) ? b.reasons.slice(0,3) : [])
     ];
-    const label = hr<.4?'clear':hr<.75?'changing':'elevated';
-    return { ...(b||a), harm_ratio: hr, confidence: conf, reasons, label };
+    const label = hr < .4 ? 'clear' : hr < .75 ? 'changing' : 'elevated';
+    return { ...(b || a), harm_ratio: hr, confidence: conf, reasons, label };
   }
-
-  async function fetchGuessOnce(){ const j = await fetchJson('/api/risk/llm_guess'); applyReading(j); }
+  async function fetchGuessOnce(){
+    const j = await fetchJson('/api/risk/llm_guess');
+    applyReading(j);
+  }
   async function fetchRouteOnce(){
-    if(!isRouteFilled()){ hudNote.textContent="Enter lat/lon + dest lat/lon."; return; }
-    const j = await postJson('/api/risk/llm_route', currentRoute()); applyReading(j);
+    if(!isRouteFilled()){
+      hudNote.textContent = "Enter lat/lon + dest lat/lon.";
+      return;
+    }
+    const j = await postJson('/api/risk/llm_route', currentRoute());
+    applyReading(j);
   }
-
-  async function fetchJson(url){ try{ const r=await fetch(url, {credentials:'same-origin'}); return await r.json(); }catch(e){ return null; } }
+  async function fetchJson(url){
+    try{
+      const r = await fetch(url, { credentials: 'same-origin' });
+      return await r.json();
+    } catch(e) { return null; }
+  }
   async function postJson(url, body){
-    try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify(body)}); return await r.json(); }catch(e){ return null; }
+    try{
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body)
+      });
+      return await r.json();
+    } catch(e){ return null; }
   }
-
-  // Optional SSE (throttled by applyReading to once per minute)
   (function trySSE(){
     if(!('EventSource' in window)) return;
     try{
       const es = new EventSource('/api/risk/stream');
-      es.onmessage = ev=>{ try{ const j=JSON.parse(ev.data); applyReading(j); }catch(_){} };
-      es.onerror = ()=>{ es.close(); };
-    }catch(e){}
+      es.onmessage = ev => {
+        try { const j = JSON.parse(ev.data); applyReading(j); } catch(_) {}
+      };
+      es.onerror = () => { es.close(); };
+    } catch(e){}
   })();
-
-  // Boot
-  toggleSeg('guess'); startAuto();
+  toggleSeg('guess');
+  startAuto();
   </script>
 </body>
 </html>
     """, seed_hex=seed_hex, seed_code=seed_code)
-
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
