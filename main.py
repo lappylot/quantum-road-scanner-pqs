@@ -3668,12 +3668,13 @@ def home():
       --glass:#ffffff14; --stroke:#ffffff22;
       --accent: {{ seed_hex }};
       --radius:18px;
+
       --halo-alpha:.18; --halo-blur:.80; --glow-mult:.80; --sweep-speed:.07;
       --shadow-lg: 0 24px 70px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
 
-      /* HUD inset + stacked wheel sizing */
+      /* centered + proportional wheel */
       --hud-inset: clamp(18px, 3.2vw, 34px);
-      --wheel-max: min(92vw, 720px);
+      --wheel-max: clamp(300px, min(68vw, 56vh), 740px);
     }
     @media (prefers-color-scheme: light){
       :root{
@@ -3682,6 +3683,7 @@ def home():
         --glass:#00000010; --stroke:#00000018;
       }
     }
+
     html,body{height:100%}
     body{
       background:
@@ -3708,6 +3710,7 @@ def home():
       border-bottom:1px solid var(--stroke); }
     .navbar-brand{ font-family:'Orbitron',sans-serif; letter-spacing:.5px; }
 
+    /* HERO card */
     .hero{
       position:relative; border-radius:calc(var(--radius) + 10px);
       background: color-mix(in oklab, var(--glass) 94%, transparent);
@@ -3723,24 +3726,33 @@ def home():
     @keyframes hueFlow{ from{transform:translateY(-1.2%) rotate(0.3deg)} to{transform:translateY(1.1%) rotate(-0.3deg)} }
     @media (max-width: 768px){ .hero::after{ display:none } }
 
+    /* centered text block */
+    .hero-content{
+      max-width: 980px;
+      margin-inline:auto;
+      text-align:center;
+    }
     .hero-title{
-      font-family:'Orbitron',sans-serif; font-weight:900; line-height:1.035; letter-spacing:.25px;
+      font-family:'Orbitron',sans-serif; font-weight:900; letter-spacing:.25px;
+      font-size: clamp(2.2rem, 4.6vw, 3.6rem);
+      line-height: 1.06;
       background: linear-gradient(90deg,#e7f3ff, color-mix(in oklab, var(--accent) 60%, #bfe3ff), #e7f3ff);
       -webkit-background-clip:text; -webkit-text-fill-color:transparent; color:var(--ink);
-    }
-    @media (prefers-color-scheme: light){
-      .hero-title{ background: linear-gradient(90deg,#19324a, color-mix(in oklab, var(--accent) 52%, #1e4466), #19324a);
-        -webkit-text-fill-color:transparent; }
+      margin-bottom: .25rem;
     }
     @supports not (-webkit-background-clip: text){ .hero-title{ color: var(--ink); } }
+    .lead-soft{
+      color:var(--sub); font-size:clamp(1rem, 1.2vw + .85rem, 1.12rem);
+      line-height:1.6; max-width:65ch; margin: .75rem auto 0;
+    }
+    .hero-cta{ gap:.6rem; justify-content:center; }
 
-    .lead-soft{ color:var(--sub); font-size:1.06rem }
     .card-g{ background: color-mix(in oklab, var(--glass) 92%, transparent);
       border:1px solid var(--stroke); border-radius: var(--radius); box-shadow: var(--shadow-lg);
       content-visibility:auto; contain: layout paint; }
 
-    /* —— Stacked wheel below text —— */
-    .wheel-standalone{ display:grid; place-items:center; margin-top:clamp(16px, 3.6vw, 28px); }
+    /* Wheel (stacked, centered) */
+    .wheel-standalone{ display:grid; place-items:center; margin-top:clamp(18px, 3.8vw, 28px); }
     .wheel-panel{
       position:relative; width:var(--wheel-max); aspect-ratio:1/1; max-width:100%;
       border-radius: calc(var(--radius) + 10px);
@@ -3748,10 +3760,7 @@ def home():
       border:1px solid var(--stroke); overflow:hidden; box-shadow: var(--shadow-lg);
       perspective:1500px; transform-style:preserve-3d; will-change:transform;
     }
-    .wheel-hud{
-      position:absolute; inset:var(--hud-inset); border-radius:inherit;
-      display:grid; place-items:center; contain:strict;
-    }
+    .wheel-hud{ position:absolute; inset:var(--hud-inset); border-radius:inherit; display:grid; place-items:center; contain:strict; }
     canvas#wheelCanvas{ width:100%; height:100%; display:block; contain:strict; }
 
     .wheel-halo{ position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; }
@@ -3780,15 +3789,10 @@ def home():
       -webkit-background-clip:text; -webkit-text-fill-color:transparent;
       text-shadow: 0 2px 18px color-mix(in srgb, var(--accent) 18%, transparent);
     }
-    @media (prefers-color-scheme: light){
-      .hud-number{ background: linear-gradient(180deg, #1c2a3c, color-mix(in oklab, var(--accent) 44%, #23486b)); -webkit-text-fill-color:transparent; text-shadow:none; }
-    }
     @supports not (-webkit-background-clip: text){ .hud-number{ color: var(--ink) } }
-
     .hud-label{ font-weight:800; color: color-mix(in oklab, var(--accent) 80%, #d8ecff);
       text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; opacity:.95; }
-    @media (prefers-color-scheme: light){ .hud-label{ color: color-mix(in oklab, var(--accent) 50%, #14324d) } }
-    .hud-note{ color:var(--muted); font-size:.95rem; max-width:26ch }
+    .hud-note{ color:var(--muted); font-size:.95rem; max-width:26ch; margin-inline:auto }
 
     .pill{ padding:.28rem .66rem; border-radius:999px; background:#ffffff18; border:1px solid var(--stroke); font-size:.85rem }
     .list-clean{margin:0; padding-left:1.2rem}
@@ -3822,25 +3826,23 @@ def home():
   </nav>
 
   <main class="container py-5">
-    <!-- HERO (text only) -->
+    <!-- HERO -->
     <section class="hero p-4 p-md-5 mb-4">
-      <div class="row">
-        <div class="col-12 col-lg-10">
-          <h1 class="hero-title display-5">Risk Colorwheel — Perceptual, Personal, Live</h1>
-          <p class="lead-soft mt-3">
-            Meet your road risk dial. It blends key signals into a single score:
-            a smooth scale from calm green → caution amber → alert red.
-            We check for changes and update automatically.
-            The dial’s gentle breathing slows when things look calm and quickens when risk rises.
-          </p>
-          <div class="d-flex flex-wrap align-items-center mt-3" style="gap:.6rem">
-            <a class="btn cta" href="{{ url_for('dashboard') }}">Open Dashboard</a>
-            <span class="pill">Your tone: {{ seed_code }}</span>
-          </div>
+      <div class="hero-content">
+        <h1 class="hero-title">Risk Colorwheel — Perceptual, Personal, Live</h1>
+        <p class="lead-soft">
+          Meet your road risk dial. It blends key signals into a single score:
+          a smooth scale from calm green → caution amber → alert red.
+          We check for changes and update automatically.
+          The dial’s gentle breathing slows when things look calm and quickens when risk rises.
+        </p>
+        <div class="d-flex flex-wrap align-items-center hero-cta">
+          <a class="btn cta" href="{{ url_for('dashboard') }}">Open Dashboard</a>
+          <span class="pill">Your tone: {{ seed_code }}</span>
         </div>
       </div>
 
-      <!-- Wheel BELOW the text -->
+      <!-- Wheel BELOW the text, centered -->
       <div class="wheel-standalone">
         <div class="wheel-panel" id="wheelPanel">
           <div class="wheel-hud">
@@ -3858,22 +3860,24 @@ def home():
         </div>
       </div>
 
-      <p class="meta mt-3">Tip: if your device has “Reduce Motion”, animations automatically calm down.</p>
+      <p class="meta mt-3 text-center">Tip: if your device has “Reduce Motion”, animations automatically calm down.</p>
     </section>
 
     <!-- CONTROLS + EXPLAINER -->
     <section class="card-g p-4 p-md-5 mb-4">
       <div class="row g-4">
         <div class="col-12 col-lg-6">
-          <h3 class="mb-2">How it works</h3>
-          <p class="meta">
-            We combine multiple signals into one easy score and smooth out noise so the dial doesn’t jump.
-            No switches or forms—just live updates.
-          </p>
-          <div class="d-flex flex-wrap align-items-center mt-3" style="gap:.7rem">
-            <button id="btnRefresh" class="btn btn-sm btn-outline-light">Refresh</button>
-            <button id="btnAuto" class="btn btn-sm btn-outline-light" aria-pressed="true">Auto: On</button>
-            <button id="btnDebug" class="btn btn-sm btn-outline-light" aria-pressed="false">Debug: Off</button>
+          <div class="text-center">
+            <h3 class="mb-2">How it works</h3>
+            <p class="meta mx-auto" style="max-width:60ch">
+              We combine multiple signals into one easy score and smooth out noise so the dial doesn’t jump.
+              No switches or forms—just live updates.
+            </p>
+            <div class="d-flex flex-wrap align-items-center justify-content-center mt-3" style="gap:.7rem">
+              <button id="btnRefresh" class="btn btn-sm btn-outline-light">Refresh</button>
+              <button id="btnAuto" class="btn btn-sm btn-outline-light" aria-pressed="true">Auto: On</button>
+              <button id="btnDebug" class="btn btn-sm btn-outline-light" aria-pressed="false">Debug: Off</button>
+            </div>
           </div>
         </div>
 
@@ -4041,7 +4045,7 @@ class RiskWheel {
     const ctx=off.getContext('2d');
 
     const sizeMin = Math.min(W,H);
-    const pad = Math.max(Math.round(sizeMin * 0.08), Math.round(30 * this.pixelRatio)); // generous pad
+    const pad = Math.max(Math.round(sizeMin * 0.08), Math.round(30 * this.pixelRatio));
     const R = sizeMin/2 - pad;
     const inner = Math.max(2, R*(1 - this._thicknessRatio));
     const midR = (R + inner)/2;
