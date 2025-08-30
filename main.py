@@ -3671,10 +3671,9 @@ def home():
       --halo-alpha:.18; --halo-blur:.80; --glow-mult:.80; --sweep-speed:.07;
       --shadow-lg: 0 24px 70px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
 
-      /* extra-safe right inset to avoid cut-off on large desktop */
-      --hud-inset-tb: clamp(18px, 2.6vw, 32px);
-      --hud-inset-l:  clamp(18px, 2.6vw, 32px);
-      --hud-inset-r:  clamp(26px, 3.6vw, 46px); /* a bit more on the right */
+      /* HUD inset + stacked wheel sizing */
+      --hud-inset: clamp(18px, 3.2vw, 34px);
+      --wheel-max: min(92vw, 720px);
     }
     @media (prefers-color-scheme: light){
       :root{
@@ -3692,107 +3691,73 @@ def home():
       color:var(--ink);
       font-family: 'Roboto', ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
       -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
-      overflow-x:hidden;
-      background-color: var(--bg1);
+      overflow-x:hidden; background-color:var(--bg1);
     }
 
-    .nebula{
-      position:fixed; inset:-12vh -12vw; pointer-events:none; z-index:-1;
+    .nebula{ position:fixed; inset:-12vh -12vw; pointer-events:none; z-index:-1;
       background:
         radial-gradient(600px 320px at 20% 10%, color-mix(in oklab, var(--accent) 16%, transparent), transparent 65%),
         radial-gradient(800px 400px at 85% 12%, color-mix(in oklab, var(--accent) 10%, transparent), transparent 70%),
         radial-gradient(1200px 600px at 50% -10%, #ffffff10, #0000 60%);
-      animation: drift 36s ease-in-out infinite alternate;
-      will-change: transform;
-      filter:saturate(112%);
-    }
+      animation: drift 36s ease-in-out infinite alternate; filter:saturate(112%); }
     @keyframes drift{ from{transform:translateY(-0.4%) scale(1.01)} to{transform:translateY(1.1%) scale(1)} }
     @media (max-width: 768px){ .nebula{ display:none } }
 
-    .navbar{
-      background: color-mix(in srgb, #000 62%, transparent);
-      backdrop-filter: saturate(140%) blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      border-bottom: 1px solid var(--stroke);
-    }
+    .navbar{ background: color-mix(in srgb, #000 62%, transparent);
+      backdrop-filter: saturate(140%) blur(10px); -webkit-backdrop-filter: blur(10px);
+      border-bottom:1px solid var(--stroke); }
     .navbar-brand{ font-family:'Orbitron',sans-serif; letter-spacing:.5px; }
 
     .hero{
       position:relative; border-radius:calc(var(--radius) + 10px);
       background: color-mix(in oklab, var(--glass) 94%, transparent);
-      border: 1px solid var(--stroke);
-      box-shadow: var(--shadow-lg);
-      overflow:hidden;
-      content-visibility: auto;
-      contain: layout paint style;
+      border: 1px solid var(--stroke); box-shadow: var(--shadow-lg);
+      overflow:hidden; content-visibility:auto; contain:layout paint style;
     }
-    .hero::after{
-      content:""; position:absolute; inset:-35%;
+    .hero::after{ content:""; position:absolute; inset:-35%;
       background:
         radial-gradient(40% 24% at 20% 10%, color-mix(in oklab, var(--accent) 28%, transparent), transparent 60%),
         radial-gradient(30% 18% at 90% 0%, color-mix(in oklab, var(--accent) 16%, transparent), transparent 65%);
       filter: blur(28px); opacity:.34; pointer-events:none;
-      animation: hueFlow 18s ease-in-out infinite alternate;
-      will-change: transform;
-    }
+      animation: hueFlow 18s ease-in-out infinite alternate; }
     @keyframes hueFlow{ from{transform:translateY(-1.2%) rotate(0.3deg)} to{transform:translateY(1.1%) rotate(-0.3deg)} }
     @media (max-width: 768px){ .hero::after{ display:none } }
 
     .hero-title{
       font-family:'Orbitron',sans-serif; font-weight:900; line-height:1.035; letter-spacing:.25px;
-      color: var(--ink);
       background: linear-gradient(90deg,#e7f3ff, color-mix(in oklab, var(--accent) 60%, #bfe3ff), #e7f3ff);
-      -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+      -webkit-background-clip:text; -webkit-text-fill-color:transparent; color:var(--ink);
     }
     @media (prefers-color-scheme: light){
-      .hero-title{
-        background: linear-gradient(90deg,#19324a, color-mix(in oklab, var(--accent) 52%, #1e4466), #19324a);
-        -webkit-text-fill-color:transparent;
-      }
+      .hero-title{ background: linear-gradient(90deg,#19324a, color-mix(in oklab, var(--accent) 52%, #1e4466), #19324a);
+        -webkit-text-fill-color:transparent; }
     }
-    @supports not (-webkit-background-clip: text){
-      .hero-title{ color: var(--ink); }
-    }
+    @supports not (-webkit-background-clip: text){ .hero-title{ color: var(--ink); } }
 
     .lead-soft{ color:var(--sub); font-size:1.06rem }
-
-    .card-g{
-      background: color-mix(in oklab, var(--glass) 92%, transparent);
+    .card-g{ background: color-mix(in oklab, var(--glass) 92%, transparent);
       border:1px solid var(--stroke); border-radius: var(--radius); box-shadow: var(--shadow-lg);
-      content-visibility: auto;
-      contain: layout paint;
-    }
+      content-visibility:auto; contain: layout paint; }
 
-    .wheel-wrap{ display:grid; grid-template-columns: minmax(320px,1.1fr) minmax(320px,1fr); gap:26px; align-items:stretch }
-    @media(max-width: 992px){ .wheel-wrap{ grid-template-columns: 1fr } }
-
+    /* —— Stacked wheel below text —— */
+    .wheel-standalone{ display:grid; place-items:center; margin-top:clamp(16px, 3.6vw, 28px); }
     .wheel-panel{
-      position:relative; border-radius: calc(var(--radius) + 10px);
+      position:relative; width:var(--wheel-max); aspect-ratio:1/1; max-width:100%;
+      border-radius: calc(var(--radius) + 10px);
       background: linear-gradient(180deg, #ffffff10, #0000001c);
       border:1px solid var(--stroke); overflow:hidden; box-shadow: var(--shadow-lg);
-      perspective: 1500px; transform-style: preserve-3d;
-      aspect-ratio: 1 / 1;
-      min-height: clamp(320px, 50vw, 620px);
-      will-change: transform;
-      box-sizing: border-box;
+      perspective:1500px; transform-style:preserve-3d; will-change:transform;
     }
-    @media (max-width: 768px){ .wheel-panel{ min-height: clamp(260px, 60vw, 460px) } }
-
-    /* asymmetric inset: a touch more on the right to guarantee clearance */
     .wheel-hud{
-      position:absolute;
-      top: var(--hud-inset-tb); bottom: var(--hud-inset-tb);
-      left: var(--hud-inset-l);  right: var(--hud-inset-r);
-      border-radius:inherit; display:grid; place-items:center;
-      contain: strict;
+      position:absolute; inset:var(--hud-inset); border-radius:inherit;
+      display:grid; place-items:center; contain:strict;
     }
-    canvas#wheelCanvas{ width:100%; height:100%; display:block; contain: strict; }
+    canvas#wheelCanvas{ width:100%; height:100%; display:block; contain:strict; }
 
     .wheel-halo{ position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; }
     .wheel-halo .halo{
       width:min(70%, 420px); aspect-ratio:1; border-radius:50%;
-      filter: blur(calc(22px * var(--halo-blur, .80))) saturate(108%);
-      opacity: var(--halo-alpha, .24);
+      filter: blur(calc(22px * var(--halo-blur, .80))) saturate(108%); opacity: var(--halo-alpha, .24);
       background: radial-gradient(50% 50% at 50% 50%,
         color-mix(in oklab, var(--accent) 70%, #fff) 0%,
         color-mix(in oklab, var(--accent) 22%, transparent) 50%,
@@ -3811,41 +3776,29 @@ def home():
     }
     .hud-number{
       font-size: clamp(2.3rem, 5.2vw, 3.6rem); font-weight:900; letter-spacing:-.02em;
-      color: var(--ink);
       background: linear-gradient(180deg, #fff, color-mix(in oklab, var(--accent) 44%, #cfeaff));
       -webkit-background-clip:text; -webkit-text-fill-color:transparent;
       text-shadow: 0 2px 18px color-mix(in srgb, var(--accent) 18%, transparent);
     }
     @media (prefers-color-scheme: light){
-      .hud-number{
-        background: linear-gradient(180deg, #1c2a3c, color-mix(in oklab, var(--accent) 44%, #23486b));
-        -webkit-text-fill-color:transparent;
-        text-shadow:none;
-      }
+      .hud-number{ background: linear-gradient(180deg, #1c2a3c, color-mix(in oklab, var(--accent) 44%, #23486b)); -webkit-text-fill-color:transparent; text-shadow:none; }
     }
-    @supports not (-webkit-background-clip: text){
-      .hud-number{ color: var(--ink) }
-    }
+    @supports not (-webkit-background-clip: text){ .hud-number{ color: var(--ink) } }
 
     .hud-label{ font-weight:800; color: color-mix(in oklab, var(--accent) 80%, #d8ecff);
       text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; opacity:.95; }
-    @media (prefers-color-scheme: light){
-      .hud-label{ color: color-mix(in oklab, var(--accent) 50%, #14324d) }
-    }
+    @media (prefers-color-scheme: light){ .hud-label{ color: color-mix(in oklab, var(--accent) 50%, #14324d) } }
     .hud-note{ color:var(--muted); font-size:.95rem; max-width:26ch }
 
     .pill{ padding:.28rem .66rem; border-radius:999px; background:#ffffff18; border:1px solid var(--stroke); font-size:.85rem }
-
     .list-clean{margin:0; padding-left:1.2rem}
     .list-clean li{ margin:.42rem 0; color:var(--sub) }
-
     .cta{
       background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 70%, #7ae6ff),
                                            color-mix(in oklab, var(--accent) 50%, #2bd1ff));
       color:#07121f; font-weight:900; border:0; padding:.85rem 1rem; border-radius:12px;
       box-shadow: 0 12px 24px color-mix(in srgb, var(--accent) 30%, transparent);
     }
-
     .meta{ color:var(--sub); font-size:.95rem }
     .debug{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.85rem; white-space:pre-wrap; max-height:220px; overflow:auto; background:#0000003a; border-radius:12px; padding:10px; border:1px dashed var(--stroke); }
   </style>
@@ -3869,10 +3822,10 @@ def home():
   </nav>
 
   <main class="container py-5">
-    <!-- HERO -->
+    <!-- HERO (text only) -->
     <section class="hero p-4 p-md-5 mb-4">
-      <div class="row align-items-center">
-        <div class="col-lg-7">
+      <div class="row">
+        <div class="col-12 col-lg-10">
           <h1 class="hero-title display-5">Risk Colorwheel — Perceptual, Personal, Live</h1>
           <p class="lead-soft mt-3">
             Meet your road risk dial. It blends key signals into a single score:
@@ -3885,30 +3838,33 @@ def home():
             <span class="pill">Your tone: {{ seed_code }}</span>
           </div>
         </div>
-        <div class="col-lg-5 mt-4 mt-lg-0">
-          <div class="wheel-panel" id="wheelPanel">
-            <div class="wheel-hud">
-              <canvas id="wheelCanvas"></canvas>
-              <div class="wheel-halo" aria-hidden="true"><div class="halo"></div></div>
-              <div class="hud-center">
-                <div class="hud-ring"></div>
-                <div class="text-center">
-                  <div class="hud-number" id="hudNumber">--%</div>
-                  <div class="hud-label" id="hudLabel">INITIALIZING</div>
-                  <div class="hud-note" id="hudNote">Calibrating…</div>
-                </div>
+      </div>
+
+      <!-- Wheel BELOW the text -->
+      <div class="wheel-standalone">
+        <div class="wheel-panel" id="wheelPanel">
+          <div class="wheel-hud">
+            <canvas id="wheelCanvas"></canvas>
+            <div class="wheel-halo" aria-hidden="true"><div class="halo"></div></div>
+            <div class="hud-center">
+              <div class="hud-ring"></div>
+              <div class="text-center">
+                <div class="hud-number" id="hudNumber">--%</div>
+                <div class="hud-label" id="hudLabel">INITIALIZING</div>
+                <div class="hud-note" id="hudNote">Calibrating…</div>
               </div>
             </div>
           </div>
-          <p class="meta mt-2">Tip: if your device has “Reduce Motion”, animations automatically calm down.</p>
         </div>
       </div>
+
+      <p class="meta mt-3">Tip: if your device has “Reduce Motion”, animations automatically calm down.</p>
     </section>
 
     <!-- CONTROLS + EXPLAINER -->
     <section class="card-g p-4 p-md-5 mb-4">
-      <div class="wheel-wrap">
-        <div>
+      <div class="row g-4">
+        <div class="col-12 col-lg-6">
           <h3 class="mb-2">How it works</h3>
           <p class="meta">
             We combine multiple signals into one easy score and smooth out noise so the dial doesn’t jump.
@@ -3921,15 +3877,13 @@ def home():
           </div>
         </div>
 
-        <div>
+        <div class="col-12 col-lg-6">
           <div class="card-g p-3">
             <div class="d-flex justify-content-between align-items-center">
               <strong>Why this score</strong>
               <span class="pill" id="confidencePill" title="Confidence">Confidence: --%</span>
             </div>
-            <ul class="list-clean mt-2" id="reasonsList">
-              <li>Waiting for an update…</li>
-            </ul>
+            <ul class="list-clean mt-2" id="reasonsList"><li>Waiting for an update…</li></ul>
             <div id="debugBox" class="debug mt-3" style="display:none">debug…</div>
           </div>
         </div>
@@ -4014,25 +3968,6 @@ let lastApplyAt = 0;
 })();
 
 /* =====================
-   Parallax (desktop only)
-====================== */
-(function parallax(){
-  const panel = $('#wheelPanel'); if(!panel || isSmallScreen || prefersReduced) return;
-  let rx=0, ry=0, raf=null, active=false;
-  function render(){ raf=null; panel.style.transform = `rotateX(${ry}deg) rotateY(${rx}deg)`; }
-  panel.addEventListener('pointerenter', ()=>{ active=true; }, {passive:true});
-  panel.addEventListener('pointerleave', ()=>{ active=false; rx=ry=0; if(!raf) raf=requestAnimationFrame(render); }, {passive:true});
-  panel.addEventListener('pointermove', e=>{
-    if(!active) return;
-    const r=panel.getBoundingClientRect();
-    const nx = (e.clientX - r.left)/r.width*2 - 1;
-    const ny = (e.clientY - r.top)/r.height*2 - 1;
-    rx = (-nx * 3.0); ry = (ny * 3.0);
-    if(!raf) raf=requestAnimationFrame(render);
-  }, {passive:true});
-})();
-
-/* =====================
    Risk-driven Breathing
 ====================== */
 class BreathEngine {
@@ -4080,8 +4015,8 @@ class RiskWheel {
     this.pixelRatio = Math.max(1, Math.min(PERF_LOW ? 1.5 : 2, devicePixelRatio||1));
     this.value = 0.0; this.target=0.0; this.vel=0.0;
     this.spring = prefersReduced ? 1.0 : (PERF_LOW ? 0.10 : 0.12);
-    this._bgCache = null;
-    this._thicknessRatio = 0.36;     // slightly thinner for extra clearance
+    this._bg = null;
+    this._thicknessRatio = 0.36;
     this.resize = this.resize.bind(this);
     new ResizeObserver(this.resize).observe(this.c);
     const panel = document.getElementById('wheelPanel');
@@ -4092,8 +4027,7 @@ class RiskWheel {
   resize(){
     const panel = document.getElementById('wheelPanel');
     const rect = (panel||this.c).getBoundingClientRect();
-    let w = rect.width||0, h = rect.height||0;
-    if (h < 2) h = w;
+    let w = rect.width||0, h = rect.height||0; if (h < 2) h = w;
     const s = Math.max(1, Math.min(w, h));
     const px = this.pixelRatio;
     this.c.width  = Math.round(s * px);
@@ -4102,35 +4036,24 @@ class RiskWheel {
     this._draw(0);
   }
   _buildBackground(){
-    const W=this.c.width, H=this.c.height;
-    if(!W || !H) return;
-
-    const off = document.createElement('canvas');
-    off.width=W; off.height=H;
+    const W=this.c.width, H=this.c.height; if(!W || !H) return;
+    const off = document.createElement('canvas'); off.width=W; off.height=H;
     const ctx=off.getContext('2d');
 
-    /* SAFE PAD
-       - 6% of size + DPI cushion
-       - ensures outer stroke & sweep never touch canvas edge
-    */
     const sizeMin = Math.min(W,H);
-    const pad = Math.max(Math.round(sizeMin * 0.06), Math.round(22 * this.pixelRatio));
-
+    const pad = Math.max(Math.round(sizeMin * 0.08), Math.round(30 * this.pixelRatio)); // generous pad
     const R = sizeMin/2 - pad;
     const inner = Math.max(2, R*(1 - this._thicknessRatio));
     const midR = (R + inner)/2;
     const lw = (R-inner);
 
     ctx.save(); ctx.translate(W/2,H/2); ctx.rotate(-Math.PI/2);
-    ctx.lineWidth = lw;
-    ctx.lineCap   = 'round';
-    ctx.lineJoin  = 'round';
-    ctx.miterLimit= 2;
+    ctx.lineWidth = lw; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.miterLimit=2;
     ctx.strokeStyle='#ffffff16';
     ctx.beginPath(); ctx.arc(0,0,midR, 0, Math.PI*2); ctx.stroke();
     ctx.restore();
 
-    this._bgCache = {canvas: off, R, inner, midR, lw};
+    this._bg = {canvas: off, R, inner, midR, lw};
   }
   tick(){
     const d = this.target - this.value;
@@ -4139,21 +4062,17 @@ class RiskWheel {
     this._draw(performance.now()/1000);
   }
   _draw(t){
-    const ctx=this.ctx, W=this.c.width, H=this.c.height;
-    if (!W || !H) return;
-
+    const ctx=this.ctx, W=this.c.width, H=this.c.height; if (!W || !H) return;
     ctx.clearRect(0,0,W,H);
-    if(this._bgCache) ctx.drawImage(this._bgCache.canvas, 0, 0);
+    if(this._bg) ctx.drawImage(this._bg.canvas, 0, 0);
 
-    const R = this._bgCache?.R || Math.min(W,H)*0.46;
-    const inner = this._bgCache?.inner || R*0.64;
-    const midR = this._bgCache?.midR || (R+inner)/2;
-    const lw = this._bgCache?.lw || (R-inner);
+    const R = this._bg?.R || Math.min(W,H)*0.46;
+    const inner = this._bg?.inner || R*0.64;
+    const midR = this._bg?.midR || (R+inner)/2;
+    const lw = this._bg?.lw || (R-inner);
 
     ctx.save(); ctx.translate(W/2,H/2); ctx.rotate(-Math.PI/2);
-    ctx.lineWidth = lw;
-    ctx.lineCap   = 'round';
-    ctx.lineJoin  = 'round';
+    ctx.lineWidth = lw; ctx.lineCap='round'; ctx.lineJoin='round';
 
     const p=clamp01(this.value), maxAng=p*Math.PI*2;
     const baseSegs = PERF_LOW ? 72 : 132;
@@ -4181,7 +4100,6 @@ class RiskWheel {
       ctx.arc(midR,0, dotR, 0, Math.PI*2); ctx.fill();
       ctx.restore();
     }
-
     ctx.restore();
   }
   _mix(h1,h2,k){
@@ -4213,17 +4131,9 @@ const smooth = { ema: null, alphaBase: 0.35, hysteresis: 0.03 };
 function labelWithHysteresis(pct){
   const tLow=40, tHigh=75, h=smooth.hysteresis*100;
   const prev=current.label || 'LOW';
-  if(prev==='LOW'){
-    if(pct > tLow + h) return (pct < tHigh ? 'MODERATE' : 'HIGH');
-    return 'LOW';
-  }else if(prev==='MODERATE'){
-    if(pct >= tHigh + h) return 'HIGH';
-    if(pct <= tLow - h) return 'LOW';
-    return 'MODERATE';
-  }else{
-    if(pct < tHigh - h) return (pct <= tLow ? 'LOW' : 'MODERATE');
-    return 'HIGH';
-  }
+  if(prev==='LOW'){ if(pct > tLow + h) return (pct < tHigh ? 'MODERATE' : 'HIGH'); return 'LOW'; }
+  if(prev==='MODERATE'){ if(pct >= tHigh + h) return 'HIGH'; if(pct <= tLow - h) return 'LOW'; return 'MODERATE'; }
+  return (pct < tHigh - h ? (pct <= tLow ? 'LOW':'MODERATE') : 'HIGH');
 }
 
 function setHUD(j){
@@ -4281,16 +4191,15 @@ let autoTimer=null;
 function startAuto(){ stopAuto(); btnAuto.setAttribute('aria-pressed','true'); btnAuto.textContent="Auto: On"; fetchOnce(); autoTimer=setInterval(fetchOnce, 60*1000); }
 function stopAuto(){ if(autoTimer) clearInterval(autoTimer); autoTimer=null; btnAuto.setAttribute('aria-pressed','false'); btnAuto.textContent="Auto: Off"; }
 
-/* Single-source fetch (no custom inputs) */
+/* Single-source fetch */
 async function fetchOnce(){
   const j = await fetchJson('/api/risk/route');
   applyReading(j);
 }
-
 async function fetchJson(url){ try{ const r=await fetch(url, {credentials:'same-origin'}); return await r.json(); }catch(e){ return null; } }
 
-// Optional SSE (skip if save-data or low perf; also throttle apply)
-(function trySSE(){
+// Optional SSE (skipped on Save-Data / low perf)
+;(function trySSE(){
   if(!('EventSource' in window) || saveData || PERF_LOW) return;
   try{
     const es = new EventSource('/api/risk/stream');
@@ -4310,6 +4219,7 @@ startAuto();
 </body>
 </html>
     """, seed_hex=seed_hex, seed_code=seed_code)
+
 
 
 
