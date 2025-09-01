@@ -1,3 +1,36 @@
+"""
+Quantum Road Scanner (QRS)
+=========================
+
+Flask web app that produces simulated "road risk" readings and stores user
+reports with end-to-end, hybrid (x25519 + ML-KEM) envelope encryption and
+ML-DSA/Ed25519 signatures. The app manages rotating session keys, sealed key
+storage, invite-based registration, rate limiting, and several background jobs.
+
+Key pieces:
+- KeyManager / SealedStore: hybrid key load/creation, sealing/unsealing, signing.
+- AES-GCM wrappers for envelope encryption of application data.
+- SQLite persistence with over-write passes + VACUUM for “best-effort” secure delete.
+- Background jobs for secret rotation and old row purging.
+- Public APIs for theme color, risk (LLM) route evaluation, and SSE streaming.
+
+Environment (subset):
+- INVITE_CODE_SECRET_KEY (bytes, HMAC key for invite codes)
+- ENCRYPTION_PASSPHRASE (str, derives KEK for env-stored private key material)
+- QRS_* (see bootstrap_env_keys for x25519/ML-KEM/ML-DSA env names)
+- REGISTRATION_ENABLED (true/false)
+- OPENAI_API_KEY (optional; enables LLM features)
+
+Security notes:
+- Envelope format "PQ2": hybrid wrap (x25519 + optional ML-KEM), AES-GCM DEK, JSON
+  envelope with signature (ML-DSA preferred; Ed25519 fallback if STRICT_PQ2_ONLY=0).
+- SealedStore allows out-of-process “split” protection via Shamir shards (QRS_SHARDS_JSON).
+- Token bucket guards repeated decrypt failures to reduce oracle signal.
+
+This module is intentionally conservative about input parsing and float coercion.
+"""
+
+
 from __future__ import annotations 
 import logging
 import httpx
