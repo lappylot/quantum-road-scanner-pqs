@@ -20,6 +20,8 @@ https://www.twitch.tv/freedomdao/clip/ToughBoldButterDansGame-EY9h7a5O_Yal5Eon
 <img width="1905" height="1067" alt="image" src="https://github.com/user-attachments/assets/ad9c7c96-bf19-4d3d-955e-012e0110a306" />
 
 # Qrs Explained (Tech Terms)
+
+```
 flowchart TB
   %% ===================================================================
   %% ONE HUGE DIAGRAM: ARCHITECTURE + MAJOR FLOWS (QRS Flask Application)
@@ -301,7 +303,7 @@ flowchart TB
   class DB db
   class BG bg
   class EXT ext
-
+```
 If you’ve ever wished your Flask app could juggle security like a HSM, speak PQC, breathe like a synthwave dashboard, and still feel snappy, you’re in the right place. This walkthrough unpacks a dense but thoughtfully engineered codebase that:
 
 * boots cryptographic material from environment variables only (no key files on disk),
