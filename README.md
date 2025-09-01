@@ -20,178 +20,179 @@ https://www.twitch.tv/freedomdao/clip/ToughBoldButterDansGame-EY9h7a5O_Yal5Eon
 <img width="1905" height="1067" alt="image" src="https://github.com/user-attachments/assets/ad9c7c96-bf19-4d3d-955e-012e0110a306" />
 
 # Qrs Explained (Tech Terms)
+
 ```mermaid
 flowchart LR
 
 %% ================= CLIENT =================
 subgraph CLIENT
-  UI[Dashboard UI]
-  NAV[User navigation: /home, /login, /register, /settings, /view_report/:id]
-  COOK[Browser cookies: session, qrs_fp]
+  client_ui[Dashboard UI]
+  client_cookies[Browser cookies: session and qrs_fp]
 end
 
-%% ================= APP / WSGI =============
-subgraph APP
-  PF[ProxyFix]
-  SO[StartupOnceMiddleware]
-  SIF[MultiKeySessionInterface]
-  CSRF[CSRFProtect]
-  BEF[before_request: ensure_fp]
-  AFT[after_request: CSP and attach cookie]
+%% ================= SERVER CORE =============
+subgraph SERVER
+  pf[ProxyFix]
+  so[StartupOnceMiddleware]
+  sif[MultiKeySessionInterface]
+  csrf[CSRFProtect]
+  br[before_request ensure_fp]
+  ar[after_request csp and cookie]
 end
 
-PF --> SO --> SIF --> CSRF
-BEF --> AFT
+pf --> so --> sif --> csrf --> br --> ar
+client_cookies --- sif
 
 %% ================= ROUTES =================
 subgraph ROUTES
-  R_health[GET /healthz]
-  R_home[GET /home]
-  R_login[GET+POST /login]
-  R_register[GET+POST /register]
-  R_settings[GET+POST /settings]
-  R_view[GET /view_report/:id]
-  API_theme[GET /api/theme/personalize]
-  API_route[POST /api/risk/llm_route]
-  API_stream[GET /api/risk/stream]
+  r_health[GET healthz]
+  r_home[GET home]
+  r_login[GET POST login]
+  r_register[GET POST register]
+  r_settings[GET POST settings]
+  r_view[GET view_report by id]
+  api_theme[GET api theme personalize]
+  api_route[POST api risk llm_route]
+  api_stream[GET api risk stream]
 end
 
-APP --> ROUTES
-UI <---> R_home
-UI <---> R_login
-UI <---> R_register
-UI <---> R_settings
-UI <---> R_view
-UI <---> API_theme
-UI <---> API_route
-UI <---> API_stream
-UI --> COOK
-COOK --> SIF
+client_ui --> r_home
+client_ui --> r_login
+client_ui --> r_register
+client_ui --> r_settings
+client_ui --> r_view
+client_ui --> api_theme
+client_ui --> api_route
+client_ui --> api_stream
 
 %% ============== BACKGROUND JOBS ===========
 subgraph BACKGROUND
-  BG_lock[BG lock (/tmp/qrs_bg.lock or ENV)]
-  BG_start[start_background_jobs_once]
-  BG_rotate[rotate_secret_key thread]
-  BG_expire[delete_expired_data thread]
+  bg_lock[background lock file]
+  bg_start[start background jobs once]
+  bg_rotate[rotate secret key thread]
+  bg_expire[delete expired data thread]
 end
 
-SO --> BG_lock --> BG_start
-BG_start --> BG_rotate
-BG_start --> BG_expire
+so --> bg_start
+bg_start --> bg_lock
+bg_start --> bg_rotate
+bg_start --> bg_expire
 
 %% ============== KEY MANAGEMENT ============
 subgraph KEYMGMT
-  KM[KeyManager: derive key via Scrypt]
-  KM_hybrid[Hybrid keys: X25519 + ML-KEM (liboqs)]
-  KM_sign[Signing: ML-DSA or Ed25519]
-  KM_sealed[SealedStore: ENV_SEALED_B64 + optional Shamir shards]
-  KM_audit[AuditTrail: append/verify/tail]
+  km[KeyManager derive key]
+  km_hybrid[x25519 plus mlkem hybrid]
+  km_sign[signing mldsa or ed25519]
+  sealed[SealedStore env sealed blob]
+  audit[AuditTrail]
 end
 
-KM --> KM_hybrid
-KM --> KM_sign
-KM --> KM_sealed
-KM --> KM_audit
+km --> km_hybrid
+km --> km_sign
+km --> sealed
+km --> audit
 
 %% ============== CRYPTO OPS ================
 subgraph CRYPTO
-  ENC[encrypt_data: compress + AES-GCM DEK + hybrid wrap + sign]
-  DEC[decrypt_data: verify + unwrap DEK + AES-GCM decrypt]
-  HK[HKDF SHA3-512]
-  A2[Argon2id: PasswordHasher]
+  encrypt_data[encrypt_data aead and hybrid wrap and sign]
+  decrypt_data[decrypt_data verify unwrap and aead]
+  hkdf[HKDF sha3]
+  argon2id[Argon2id password hasher]
 end
 
-KM_hybrid --> ENC
-KM_sign --> ENC
-HK --> ENC
-KM_sign --> DEC
-KM_hybrid --> DEC
-HK --> DEC
+km_hybrid --> encrypt_data
+km_sign --> encrypt_data
+hkdf --> encrypt_data
 
-%% ============== QUANTUM / SIGNALS =========
+km_hybrid --> decrypt_data
+km_sign --> decrypt_data
+hkdf --> decrypt_data
+
+%% ============== QUANTUM AND SIGNALS =========
 subgraph QUANTUM
-  Q_scan[quantum_hazard_scan (PennyLane)]
-  Q_sig[_system_signals (cpu, ram, rng, quantum features)]
-  ColorSync[ColorSync: accent color sampling]
+  quant_scan[quantum_hazard_scan pennylane]
+  sys_signals[system signals cpu ram rng quantum]
+  colorsync[ColorSync accent sampling]
 end
 
-Q_scan --> Q_sig
-ColorSync --> API_theme
-Q_sig --> API_route
-Q_sig --> API_stream
+quant_scan --> sys_signals
+sys_signals --> api_route
+sys_signals --> api_stream
+colorsync --> api_theme
 
-%% ============== LLM / OPENAI ==============
+%% ============== LLM INTEGRATION ==============
 subgraph LLM
-  L_call[_call_llm: chat.completions JSON]
-  L_resp[run_openai_completion: responses API]
-  PHF[phf_filter_input: harm filtering]
+  call_llm[_call_llm chat completions json]
+  resp_api[run_openai_completion responses api]
+  phf[phf_filter_input harm filtering]
 end
 
-API_route --> L_call --> OPENAI
-API_stream --> L_call
-R_register --> PHF --> R_register
-L_resp --> R_register
+api_route --> call_llm
+api_stream --> call_llm
+call_llm --> openai[OpenAI APIs]
+resp_api --> openai
+r_register --> phf --> openai
 
-%% ============== EXTERNAL ==================
-subgraph EXTERNAL
-  OPENAI[OpenAI APIs]
-  OQS[liboqs (ML-KEM / ML-DSA)]
+%% ============== EXTERNAL CRYPTO =============
+subgraph EXT_CRYPTO
+  liboqs[liboqs mlkem and mldsa]
 end
 
-OQS --> KM_hybrid
-OQS --> KM_sign
+liboqs --> km_hybrid
+liboqs --> km_sign
 
 %% ============== DATABASE ==================
 subgraph DB
-  DB_file[SQLite file: /var/data/secure_data.db]
-  DB_tables[Tables: users, hazard_reports, config, rate_limits, invite_codes, entropy_logs]
+  sqlite_file[SQLite file var data]
+  tbl_users[table users]
+  tbl_hazard[table hazard_reports]
+  tbl_config[table config]
+  tbl_rates[table rate_limits]
+  tbl_invites[table invite_codes]
+  tbl_entropy[table entropy_logs]
 end
 
-DB_file --> DB_tables
+sqlite_file --> tbl_users
+sqlite_file --> tbl_hazard
+sqlite_file --> tbl_config
+sqlite_file --> tbl_rates
+sqlite_file --> tbl_invites
+sqlite_file --> tbl_entropy
 
-R_register -- "create user (encrypted fields)" --> DB_tables
-R_login -- "verify password (Argon2id)" --> DB_tables
-API_route -- "save hazard report (encrypted)" --> DB_tables
-R_view -- "read and decrypt report" --> DB_tables
-R_settings -- "insert invite code" --> DB_tables
-BG_expire -- "overwrite and delete expired rows, then VACUUM" --> DB_tables
+r_register --> tbl_users
+r_login --> tbl_users
+api_route --> tbl_hazard
+r_view --> tbl_hazard
+r_settings --> tbl_invites
+bg_expire --> tbl_hazard
+bg_expire --> tbl_entropy
+bg_expire --> tbl_rates
+
+encrypt_data --> tbl_hazard
+decrypt_data --> r_view
+argon2id --> r_login
+argon2id --> r_register
 
 %% ============== FILES =====================
 subgraph FILES
-  F_audit[audit.log (encrypted, chain-hashed)]
-  F_hd[hd_epoch.json (HD epoch)]
+  file_audit[audit log encrypted chain]
+  file_hd[hd epoch json]
 end
 
-KM_audit --> F_audit
-F_hd --> ENC
-F_hd --> DEC
+audit --> file_audit
+file_hd --> encrypt_data
+file_hd --> decrypt_data
 
-%% ============== ENV / CONFIG ==============
+%% ============== ENV AND CONFIG ============
 subgraph ENV
-  E_vars[ENV vars: INVITE_CODE_SECRET_KEY, ENCRYPTION_PASSPHRASE, QRS_*, REGISTRATION_ENABLED, STRICT_PQ2_ONLY]
-  E_sealed[ENV_SEALED_B64 (sealed keys)]
+  env_vars[env variables keys and flags]
+  env_sealed[env sealed b64]
 end
 
-E_vars --> KM
-E_sealed --> KM_sealed
-KM_sealed --> E_sealed
-
-%% ============== SESSION FLOW ==============
-BG_rotate --> SIF
-SIF --> COOK
-
-%% ============== CLIENT <-> APP ============
-CLIENT -- "HTTP" --> APP
-APP -- "HTML + JS + CSRF token" --> CLIENT
-CLIENT -- "Fetch theme" --> API_theme
-CLIENT -- "POST risk" --> API_route
-CLIENT -- "SSE stream" --> API_stream
-CLIENT -- "Login form" --> R_login
-CLIENT -- "Register form" --> R_register
-CLIENT -- "View report" --> R_view
+env_vars --> km
+env_sealed --> sealed
+sealed --> env_sealed
 ```
-
 If you’ve ever wished your Flask app could juggle security like a HSM, speak PQC, breathe like a synthwave dashboard, and still feel snappy, you’re in the right place. This walkthrough unpacks a dense but thoughtfully engineered codebase that:
 
 * boots cryptographic material from environment variables only (no key files on disk),
