@@ -2599,25 +2599,91 @@ def api_theme_personalize():
     seed = colorsync.sample(uid)
     return jsonify({"hex": seed.get("hex", "#49c2ff"), "code": seed.get("qid25",{}).get("code","B2")})
 
-
 @app.route("/api/risk/llm_route", methods=["POST"])
 def api_llm_route():
     uid = _user_id()
     body = request.get_json(force=True, silent=True) or {}
-    try:
-        route = {
-            "lat": float(body["lat"]), "lon": float(body["lon"]),
-            "dest_lat": float(body["dest_lat"]), "dest_lon": float(body["dest_lon"]),
-        }
-    except Exception:
-        return jsonify({"error":"lat, lon, dest_lat, dest_lon required"}), 400
+
+    # --- robust numeric coercion for coordinates ---
+    from decimal import Decimal, InvalidOperation
+    import math
+
+    def _coerce_coord(val, *, minv: float, maxv: float, default: float = 0.0) -> float:
+        """
+        Safely coerce a JSON value to a bounded float coordinate.
+        - Accepts numbers or numeric strings.
+        - Rejects NaN/Infinity and booleans.
+        - Clamps to [minv, maxv].
+        - Defaults to `default` on any issue.
+        """
+        if isinstance(val, bool):
+            return default
+
+        try:
+            if isinstance(val, (int, float)):
+                if isinstance(val, float) and not math.isfinite(val):
+                    return default
+                d = Decimal(str(val))
+            elif isinstance(val, str):
+                s = val.strip()
+                if len(s) == 0 or len(s) > 64:
+                    return default
+                d = Decimal(s)
+            else:
+                return default
+        except (InvalidOperation, ValueError, TypeError):
+            return default
+
+        if d.is_nan() or d.is_infinite():
+            return default
+
+        d_min = Decimal(str(minv))
+        d_max = Decimal(str(maxv))
+        if d < d_min:
+            d = d_min
+        elif d > d_max:
+            d = d_max
+
+        try:
+            d = d.quantize(Decimal("0.000001"))
+        except InvalidOperation:
+            pass
+
+        f = float(d)
+        if not math.isfinite(f):
+            return default
+
+        if f < minv:
+            f = minv
+        elif f > maxv:
+            f = maxv
+        return f
+
+    route = {
+        "lat": _coerce_coord(body.get("lat", 0),  minv=-90.0,  maxv=90.0),
+        "lon": _coerce_coord(body.get("lon", 0),  minv=-180.0, maxv=180.0),
+    }
 
     sig = _system_signals(uid)
     prompt = _build_route_prompt(uid, sig, route)
-    data = _call_llm(prompt) or _fallback_score(sig, route)
-    data["server_enriched"] = {"ts": datetime.utcnow().isoformat()+"Z","mode":"route","sig": sig,"route": route}
+
+    # LLM only — no fallback
+    data = _call_llm(prompt)
+    meta = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "mode": "route",
+        "sig": sig,
+        "route": route,
+    }
+
+    if not isinstance(data, dict):
+        # Graceful error so the frontend can ignore this tick
+        payload = {"error": "llm_unavailable", "server_enriched": meta}
+        return _attach_cookie(jsonify(payload)), 503
+
+    data["server_enriched"] = meta
     return _attach_cookie(jsonify(data))
-    
+
 @app.route("/api/risk/stream")
 def api_stream():
 
@@ -2984,12 +3050,43 @@ def generate_invite_code(length=24, use_checksum=True):
 
     return invite_code
 
-
 def register_user(username, password, invite_code=None):
-    username = sanitize_input(username)
-    password = sanitize_input(password)
+    # Keep originals to detect any mutation by sanitizer
+    raw_username = username
+    raw_password = password
 
-    if not validate_password_strength(password):
+    sanitized_username = sanitize_input(raw_username)
+    sanitized_password = sanitize_input(raw_password)
+
+    # If bleach/sanitizer would alter either field, fail fast to avoid silent changes
+    if sanitized_username != raw_username:
+        logger.warning(
+            "Registration blocked: username contained chars that would be sanitized."
+        )
+        return False, (
+            "Username contains disallowed characters "
+            '(e.g., <, >, ", \', &, or control/control-like chars). '
+            "Please remove them and try again."
+        )
+
+    if sanitized_password != raw_password:
+        # Do NOT log the password or its characters.
+        logger.warning(
+            f"Registration blocked for user '{raw_username}': password contained chars that would be sanitized."
+        )
+        return False, (
+            "Password contains disallowed characters "
+            '(e.g., <, >, ", \', &, or control/control-like chars). '
+            "Please remove them and try again."
+        )
+
+    # Proceed using the validated values:
+    # - Username can safely use the sanitized value (it equals the original here).
+    # - Password should not be sanitized before hashing; use the original.
+    username = sanitized_username
+    password_to_hash = raw_password
+
+    if not validate_password_strength(password_to_hash):
         logger.warning(f"User '{username}' provided a weak password.")
         return False, "Bad password, please use a stronger one."
 
@@ -3013,7 +3110,7 @@ def register_user(username, password, invite_code=None):
             )
             return False, "Invalid invite code format."
 
-    hashed_password = ph.hash(password)
+    hashed_password = ph.hash(password_to_hash)
     preferred_model_encrypted = encrypt_data('openai')
 
     with sqlite3.connect(DB_FILE) as db:
@@ -3021,8 +3118,7 @@ def register_user(username, password, invite_code=None):
         try:
             db.execute("BEGIN")
 
-            cursor.execute("SELECT 1 FROM users WHERE username = ?",
-                           (username, ))
+            cursor.execute("SELECT 1 FROM users WHERE username = ?", (username,))
             if cursor.fetchone():
                 logger.warning(
                     f"Registration failed: Username '{username}' is already taken."
@@ -3033,7 +3129,8 @@ def register_user(username, password, invite_code=None):
             if not registration_enabled:
                 cursor.execute(
                     "SELECT id, is_used FROM invite_codes WHERE code = ?",
-                    (invite_code, ))
+                    (invite_code,),
+                )
                 row = cursor.fetchone()
                 if not row:
                     logger.warning(
@@ -3048,17 +3145,19 @@ def register_user(username, password, invite_code=None):
                     db.rollback()
                     return False, "Invite code has already been used."
                 cursor.execute(
-                    "UPDATE invite_codes SET is_used = 1 WHERE id = ?",
-                    (row[0], ))
+                    "UPDATE invite_codes SET is_used = 1 WHERE id = ?", (row[0],)
+                )
                 logger.debug(
-                    f"Invite code ID {row[0]} used by user '{username}'.")
+                    f"Invite code ID {row[0]} used by user '{username}'."
+                )
 
             is_admin = 0
 
             cursor.execute(
-                "INSERT INTO users (username, password, is_admin, preferred_model) VALUES (?, ?, ?, ?)",
-                (username, hashed_password, is_admin,
-                 preferred_model_encrypted))
+                "INSERT INTO users (username, password, is_admin, preferred_model) "
+                "VALUES (?, ?, ?, ?)",
+                (username, hashed_password, is_admin, preferred_model_encrypted),
+            )
             user_id = cursor.lastrowid
             logger.debug(
                 f"User '{username}' registered successfully with user_id {user_id}."
@@ -3070,13 +3169,15 @@ def register_user(username, password, invite_code=None):
             db.rollback()
             logger.error(
                 f"Database integrity error during registration for user '{username}': {e}",
-                exc_info=True)
+                exc_info=True,
+            )
             return False, "Registration failed due to a database error."
         except Exception as e:
             db.rollback()
             logger.error(
                 f"Unexpected error during registration for user '{username}': {e}",
-                exc_info=True)
+                exc_info=True,
+            )
             return False, "An unexpected error occurred during registration."
 
     session.clear()
@@ -3637,10 +3738,12 @@ class ReportForm(FlaskForm):
 @app.route('/')
 def index():
     return redirect(url_for('home'))
-
 @app.route('/home')
 def home():
-  
+    # CSRF token for JS POSTs
+    from flask_wtf.csrf import generate_csrf
+    csrf_token = generate_csrf()
+
     seed = colorsync.sample()
     seed_hex = seed.get("hex", "#49c2ff")
     seed_code = seed.get("qid25", {}).get("code", "B2")
@@ -3652,6 +3755,7 @@ def home():
   <title>Quantum Road Scanner — Home+</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
+  <meta name="csrf-token" content="{{ csrf_token }}" />
 
   <!-- Fonts & CSS (SRI) -->
   <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
@@ -3672,7 +3776,6 @@ def home():
       --halo-alpha:.18; --halo-blur:.80; --glow-mult:.80; --sweep-speed:.07;
       --shadow-lg: 0 24px 70px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
 
-      /* centered + proportional wheel */
       --hud-inset: clamp(18px, 3.2vw, 34px);
       --wheel-max: clamp(300px, min(68vw, 56vh), 740px);
     }
@@ -3741,17 +3844,13 @@ def home():
       margin-bottom: .25rem;
     }
     @supports not (-webkit-background-clip: text){ .hero-title{ color: var(--ink); } }
-    .lead-soft{
-      color:var(--sub); font-size:clamp(1rem, 1.2vw + .85rem, 1.12rem);
-      line-height:1.6; max-width:65ch; margin: .75rem auto 0;
-    }
+    .lead-soft{ color:var(--sub); font-size:clamp(1rem, 1.2vw + .85rem, 1.12rem); line-height:1.6; max-width:65ch; margin:.75rem auto 0; }
     .hero-cta{ gap:.6rem; justify-content:center; }
 
     .card-g{ background: color-mix(in oklab, var(--glass) 92%, transparent);
       border:1px solid var(--stroke); border-radius: var(--radius); box-shadow: var(--shadow-lg);
       content-visibility:auto; contain: layout paint; }
 
-    /* Wheel (stacked, centered) */
     .wheel-standalone{ display:grid; place-items:center; margin-top:clamp(18px, 3.8vw, 28px); }
     .wheel-panel{
       position:relative; width:var(--wheel-max); aspect-ratio:1/1; max-width:100%;
@@ -3790,8 +3889,7 @@ def home():
       text-shadow: 0 2px 18px color-mix(in srgb, var(--accent) 18%, transparent);
     }
     @supports not (-webkit-background-clip: text){ .hud-number{ color: var(--ink) } }
-    .hud-label{ font-weight:800; color: color-mix(in oklab, var(--accent) 80%, #d8ecff);
-      text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; opacity:.95; }
+    .hud-label{ font-weight:800; color: color-mix(in oklab, var(--accent) 80%, #d8ecff); text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; opacity:.95; }
     .hud-note{ color:var(--muted); font-size:.95rem; max-width:26ch; margin-inline:auto }
 
     .pill{ padding:.28rem .66rem; border-radius:999px; background:#ffffff18; border:1px solid var(--stroke); font-size:.85rem }
@@ -4126,9 +4224,9 @@ class RiskWheel {
    Store + bindings + smoothing
 ====================== */
 const wheel = new RiskWheel(document.getElementById('wheelCanvas'));
-const hudNumber=$('#hudNumber'), hudLabel=$('#hudLabel'), hudNote=$('#hudNote');
+const hudNumber=$('#hudNumber'), hudLabel=$('#hudLabel'), hudNote=$('#hudNote']);
 const reasonsList=$('#reasonsList'), confidencePill=$('#confidencePill'), debugBox=$('#debugBox');
-const btnRefresh=$('#btnRefresh'), btnAuto=$('#btnAuto'), btnDebug=$('#btnDebug');
+const btnRefresh=$('#btnRefresh'), btnAuto=$('#btnAuto'), btnDebug=$('#btnDebug']);
 
 const current = { harm:0, last:null, label:'INITIALIZING' };
 const smooth = { ema: null, alphaBase: 0.35, hysteresis: 0.03 };
@@ -4196,26 +4294,54 @@ let autoTimer=null;
 function startAuto(){ stopAuto(); btnAuto.setAttribute('aria-pressed','true'); btnAuto.textContent="Auto: On"; fetchOnce(); autoTimer=setInterval(fetchOnce, 60*1000); }
 function stopAuto(){ if(autoTimer) clearInterval(autoTimer); autoTimer=null; btnAuto.setAttribute('aria-pressed','false'); btnAuto.textContent="Auto: Off"; }
 
-/* Single-source fetch */
-async function fetchOnce(){
-  const j = await fetchJson('/api/risk/route');
-  applyReading(j);
-}
-async function fetchJson(url){ try{ const r=await fetch(url, {credentials:'same-origin'}); return await r.json(); }catch(e){ return null; } }
+/* ================
+   LLM-only fetch (POST + CSRF) — CURRENT LOCATION ONLY
+=================== */
+const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content;
 
-// Optional SSE (skipped on Save-Data / low perf)
-;(function trySSE(){
-  if(!('EventSource' in window) || saveData || PERF_LOW) return;
+async function currentLatLon(){
+  if(!('geolocation' in navigator)) return {lat:0, lon:0, source:'none'};
+  return new Promise((resolve)=>{
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({
+        lat: (pos.coords && Number.isFinite(pos.coords.latitude)) ? pos.coords.latitude : 0,
+        lon: (pos.coords && Number.isFinite(pos.coords.longitude)) ? pos.coords.longitude : 0,
+        source: 'geo'
+      }),
+      _err => resolve({lat:0, lon:0, source:'fallback'}),
+      {enableHighAccuracy:true, maximumAge: 60000, timeout: 4000}
+    );
+  });
+}
+
+async function fetchOnce(){
+  const coords = await currentLatLon();
+  const payload = {
+    lat: Number.isFinite(coords.lat) ? coords.lat : 0,
+    lon: Number.isFinite(coords.lon) ? coords.lon : 0,
+    reason: 'home_refresh',
+    ts: Date.now()
+  };
+  const j = await postJson('/api/risk/llm_route', payload);
+  applyReading(j || {});
+}
+
+async function postJson(url, data){
   try{
-    const es = new EventSource('/api/risk/stream');
-    es.onmessage = ev=>{
-      if(Date.now() - lastApplyAt < MIN_UPDATE_MS) return;
-      try{ const j=JSON.parse(ev.data); applyReading(j); }catch(_){}
-    };
-    es.onerror = ()=>{ es.close(); };
-    document.addEventListener('visibilitychange', ()=>{ if(document.hidden) es.close(); }, {once:true});
-  }catch(e){}
-})();
+    const r = await fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': CSRF_TOKEN
+      },
+      body: JSON.stringify(data || {})
+    });
+    return await r.json();
+  }catch(e){
+    return null;
+  }
+}
 
 // Boot
 startAuto();
@@ -4223,7 +4349,8 @@ startAuto();
 
 </body>
 </html>
-    """, seed_hex=seed_hex, seed_code=seed_code)
+    """, seed_hex=seed_hex, seed_code=seed_code, csrf_token=csrf_token)
+
 
 
 
