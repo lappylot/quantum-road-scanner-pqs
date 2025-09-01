@@ -3747,6 +3747,7 @@ def home():
     seed = colorsync.sample()
     seed_hex = seed.get("hex", "#49c2ff")
     seed_code = seed.get("qid25", {}).get("code", "B2")
+
     return render_template_string("""
 <!DOCTYPE html>
 <html lang="en">
@@ -3776,6 +3777,7 @@ def home():
       --halo-alpha:.18; --halo-blur:.80; --glow-mult:.80; --sweep-speed:.07;
       --shadow-lg: 0 24px 70px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
 
+      /* centered + proportional wheel */
       --hud-inset: clamp(18px, 3.2vw, 34px);
       --wheel-max: clamp(300px, min(68vw, 56vh), 740px);
     }
@@ -3844,13 +3846,17 @@ def home():
       margin-bottom: .25rem;
     }
     @supports not (-webkit-background-clip: text){ .hero-title{ color: var(--ink); } }
-    .lead-soft{ color:var(--sub); font-size:clamp(1rem, 1.2vw + .85rem, 1.12rem); line-height:1.6; max-width:65ch; margin:.75rem auto 0; }
+    .lead-soft{
+      color:var(--sub); font-size:clamp(1rem, 1.2vw + .85rem, 1.12rem);
+      line-height:1.6; max-width:65ch; margin: .75rem auto 0;
+    }
     .hero-cta{ gap:.6rem; justify-content:center; }
 
     .card-g{ background: color-mix(in oklab, var(--glass) 92%, transparent);
       border:1px solid var(--stroke); border-radius: var(--radius); box-shadow: var(--shadow-lg);
       content-visibility:auto; contain: layout paint; }
 
+    /* Wheel (stacked, centered) */
     .wheel-standalone{ display:grid; place-items:center; margin-top:clamp(18px, 3.8vw, 28px); }
     .wheel-panel{
       position:relative; width:var(--wheel-max); aspect-ratio:1/1; max-width:100%;
@@ -3889,7 +3895,8 @@ def home():
       text-shadow: 0 2px 18px color-mix(in srgb, var(--accent) 18%, transparent);
     }
     @supports not (-webkit-background-clip: text){ .hud-number{ color: var(--ink) } }
-    .hud-label{ font-weight:800; color: color-mix(in oklab, var(--accent) 80%, #d8ecff); text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; opacity:.95; }
+    .hud-label{ font-weight:800; color: color-mix(in oklab, var(--accent) 80%, #d8ecff);
+      text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; opacity:.95; }
     .hud-note{ color:var(--muted); font-size:.95rem; max-width:26ch; margin-inline:auto }
 
     .pill{ padding:.28rem .66rem; border-radius:999px; background:#ffffff18; border:1px solid var(--stroke); font-size:.85rem }
@@ -4006,20 +4013,20 @@ def home():
 /* =====================
    Utils & perf flags
 ====================== */
-const $ = (s, el=document)=>el.querySelector(s);
-const clamp01 = x => Math.max(0, Math.min(1, x));
-const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const isSmallScreen = matchMedia('(max-width: 768px)').matches;
-const lowCores = (navigator.hardwareConcurrency||8) <= 4;
-const saveData = (navigator.connection && navigator.connection.saveData) || false;
-const PERF_LOW = prefersReduced || isSmallScreen || lowCores;
+var $ = function(s, el){ return (el || document).querySelector(s); };
+var clamp01 = function(x){ return Math.max(0, Math.min(1, x)); };
+var prefersReduced = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+var isSmallScreen = window.matchMedia && matchMedia('(max-width: 768px)').matches;
+var lowCores = (navigator.hardwareConcurrency || 8) <= 4;
+var saveData = (navigator.connection && navigator.connection.saveData) || false;
+var PERF_LOW = prefersReduced || isSmallScreen || lowCores;
 
 /* =====================
    Single RAF loop (shared)
 ====================== */
-const FPS_WHEEL  = PERF_LOW ? 14 : 24;
-const FPS_BREATH = PERF_LOW ? 10 : 20;
-let _lastWheel = 0, _lastBreath = 0, _rafId = null, _visible = true;
+var FPS_WHEEL  = PERF_LOW ? 14 : 24;
+var FPS_BREATH = PERF_LOW ? 10 : 20;
+var _lastWheel = 0, _lastBreath = 0, _rafId = null, _visible = true;
 
 function rafLoop(ts){
   if(_visible){
@@ -4031,21 +4038,25 @@ function rafLoop(ts){
 _rafId = requestAnimationFrame(rafLoop);
 
 // Pause when not visible / tab hidden
-const visTarget = document.getElementById('wheelPanel') || document.body;
-new IntersectionObserver((entries)=>{ _visible = entries.some(e=>e.isIntersecting); }, {threshold: 0.05}).observe(visTarget);
-document.addEventListener('visibilitychange', ()=>{ _visible = !document.hidden; }, {passive:true});
+var visTarget = document.getElementById('wheelPanel') || document.body;
+new IntersectionObserver(function(entries){
+  _visible = entries.some(function(e){ return e.isIntersecting; });
+}, {threshold: 0.05}).observe(visTarget);
+document.addEventListener('visibilitychange', function(){ _visible = !document.hidden; }, {passive:true});
 
 /* =====================
    Theme fetch (idle)
 ====================== */
-const MIN_UPDATE_MS = 60 * 1000; // 🔒 only change once per minute
-let lastApplyAt = 0;
+var MIN_UPDATE_MS = 60 * 1000; // only change once per minute
+var lastApplyAt = 0;
 
-(async function themeSync(){
+(function themeSync(){
   try{
-    const r=await fetch('/api/theme/personalize', {credentials:'same-origin'});
-    const j=await r.json();
-    if(j?.hex) document.documentElement.style.setProperty('--accent', j.hex);
+    fetch('/api/theme/personalize', {credentials:'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(j && j.hex){ document.documentElement.style.setProperty('--accent', j.hex); }
+      }).catch(function(){});
   }catch(e){}
 })();
 
@@ -4053,16 +4064,16 @@ let lastApplyAt = 0;
    ensure wheel has height (CSS fallback)
 ====================== */
 (function ensureWheelSize(){
-  const panel = $('#wheelPanel');
+  var panel = $('#wheelPanel');
   if(!panel) return;
-  let resizeTimeout;
+  var resizeTimeout;
   function fit(){
     clearTimeout(resizeTimeout);
-    resizeTimeout = setTimeout(()=>{
-      const w = panel.clientWidth || panel.offsetWidth || 0;
-      const ch = parseFloat(getComputedStyle(panel).height) || 0;
+    resizeTimeout = setTimeout(function(){
+      var w = panel.clientWidth || panel.offsetWidth || 0;
+      var ch = parseFloat(getComputedStyle(panel).height) || 0;
       if (ch < 24 && w > 0) panel.style.height = w + 'px';
-      wheel?.resize();
+      if (wheel && wheel.resize) wheel.resize();
     }, 80);
   }
   new ResizeObserver(fit).observe(panel);
@@ -4073,180 +4084,180 @@ let lastApplyAt = 0;
 /* =====================
    Risk-driven Breathing
 ====================== */
-class BreathEngine {
-  constructor(){
-    this.rateHz = 0.08;
-    this.amp    = 0.48;
-    this.sweep  = 0.10;
-    this._rateTarget=this.rateHz; this._ampTarget=this.amp; this._sweepTarget=this.sweep;
-    this.val    = 0.7;
-  }
-  setFromRisk(risk, {confidence=1}={}) {
-    risk = clamp01(risk||0); confidence = clamp01(confidence);
-    this._rateTarget = prefersReduced ? (0.04 + 0.02*risk) : (0.05 + 0.12*risk);
-    const baseAmp = prefersReduced ? (0.30 + 0.18*risk) : (0.32 + 0.45*risk);
-    this._ampTarget = baseAmp * (0.70 + 0.30*confidence);
-    this._sweepTarget = prefersReduced ? (0.05 + 0.05*risk) : (0.06 + 0.12*risk);
-  }
-  tick(){
-    const t = performance.now()/1000;
-    const k = prefersReduced ? 0.07 : 0.15;
-    this.rateHz += (this._rateTarget - this.rateHz)*k;
-    this.amp    += (this._ampTarget  - this.amp   )*k;
-    this.sweep  += (this._sweepTarget- this.sweep )*k;
-
-    const base  = 0.5 + 0.5 * Math.sin(2*Math.PI*this.rateHz * t);
-    const depth = 0.85 + 0.15 * Math.sin(2*Math.PI*this.rateHz * 0.5 * t);
-    const tremorAmt = prefersReduced ? 0 : (Math.max(0, current.harm - 0.80) * 0.014);
-    const tremor = tremorAmt * Math.sin(2*Math.PI*8 * t);
-    this.val = 0.55 + this.amp*(base*depth - 0.5) + tremor;
-
-    document.documentElement.style.setProperty('--halo-alpha', (0.15 + 0.24*this.val).toFixed(3));
-    document.documentElement.style.setProperty('--halo-blur',  (0.52 + 0.62*this.val).toFixed(3));
-    document.documentElement.style.setProperty('--glow-mult',  (0.52 + 0.75*this.val).toFixed(3));
-    document.documentElement.style.setProperty('--sweep-speed', this.sweep.toFixed(3));
-  }
+function BreathEngine(){
+  this.rateHz = 0.08;
+  this.amp    = 0.48;
+  this.sweep  = 0.10;
+  this._rateTarget=this.rateHz; this._ampTarget=this.amp; this._sweepTarget=this.sweep;
+  this.val    = 0.7;
 }
-const breath = new BreathEngine();
+BreathEngine.prototype.setFromRisk = function(risk, opts){
+  opts = opts || {};
+  var confidence = 'confidence' in opts ? opts.confidence : 1;
+  risk = clamp01(risk || 0); confidence = clamp01(confidence);
+  this._rateTarget = prefersReduced ? (0.04 + 0.02*risk) : (0.05 + 0.12*risk);
+  var baseAmp = prefersReduced ? (0.30 + 0.18*risk) : (0.32 + 0.45*risk);
+  this._ampTarget = baseAmp * (0.70 + 0.30*confidence);
+  this._sweepTarget = prefersReduced ? (0.05 + 0.05*risk) : (0.06 + 0.12*risk);
+};
+BreathEngine.prototype.tick = function(){
+  var t = performance.now()/1000;
+  var k = prefersReduced ? 0.07 : 0.15;
+  this.rateHz += (this._rateTarget - this.rateHz)*k;
+  this.amp    += (this._ampTarget  - this.amp   )*k;
+  this.sweep  += (this._sweepTarget- this.sweep )*k;
+
+  var base  = 0.5 + 0.5 * Math.sin(2*Math.PI*this.rateHz * t);
+  var depth = 0.85 + 0.15 * Math.sin(2*Math.PI*this.rateHz * 0.5 * t);
+  var tremorAmt = prefersReduced ? 0 : (Math.max(0, current.harm - 0.80) * 0.014);
+  var tremor = tremorAmt * Math.sin(2*Math.PI*8 * t);
+  this.val = 0.55 + this.amp*(base*depth - 0.5) + tremor;
+
+  document.documentElement.style.setProperty('--halo-alpha', (0.15 + 0.24*this.val).toFixed(3));
+  document.documentElement.style.setProperty('--halo-blur',  (0.52 + 0.62*this.val).toFixed(3));
+  document.documentElement.style.setProperty('--glow-mult',  (0.52 + 0.75*this.val).toFixed(3));
+  document.documentElement.style.setProperty('--sweep-speed', this.sweep.toFixed(3));
+};
+var breath = new BreathEngine();
 
 /* =====================
    Risk Wheel (2D canvas)
 ====================== */
-class RiskWheel {
-  constructor(canvas){
-    this.c = canvas; this.ctx = canvas.getContext('2d');
-    this.pixelRatio = Math.max(1, Math.min(PERF_LOW ? 1.5 : 2, devicePixelRatio||1));
-    this.value = 0.0; this.target=0.0; this.vel=0.0;
-    this.spring = prefersReduced ? 1.0 : (PERF_LOW ? 0.10 : 0.12);
-    this._bg = null;
-    this._thicknessRatio = 0.36;
-    this.resize = this.resize.bind(this);
-    new ResizeObserver(this.resize).observe(this.c);
-    const panel = document.getElementById('wheelPanel');
-    if (panel) new ResizeObserver(this.resize).observe(panel);
-    this.resize();
-  }
-  setTarget(x){ this.target = clamp01(x); }
-  resize(){
-    const panel = document.getElementById('wheelPanel');
-    const rect = (panel||this.c).getBoundingClientRect();
-    let w = rect.width||0, h = rect.height||0; if (h < 2) h = w;
-    const s = Math.max(1, Math.min(w, h));
-    const px = this.pixelRatio;
-    this.c.width  = Math.round(s * px);
-    this.c.height = Math.round(s * px);
-    this._buildBackground();
-    this._draw(0);
-  }
-  _buildBackground(){
-    const W=this.c.width, H=this.c.height; if(!W || !H) return;
-    const off = document.createElement('canvas'); off.width=W; off.height=H;
-    const ctx=off.getContext('2d');
-
-    const sizeMin = Math.min(W,H);
-    const pad = Math.max(Math.round(sizeMin * 0.08), Math.round(30 * this.pixelRatio));
-    const R = sizeMin/2 - pad;
-    const inner = Math.max(2, R*(1 - this._thicknessRatio));
-    const midR = (R + inner)/2;
-    const lw = (R-inner);
-
-    ctx.save(); ctx.translate(W/2,H/2); ctx.rotate(-Math.PI/2);
-    ctx.lineWidth = lw; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.miterLimit=2;
-    ctx.strokeStyle='#ffffff16';
-    ctx.beginPath(); ctx.arc(0,0,midR, 0, Math.PI*2); ctx.stroke();
-    ctx.restore();
-
-    this._bg = {canvas: off, R, inner, midR, lw};
-  }
-  tick(){
-    const d = this.target - this.value;
-    this.vel = this.vel * 0.82 + d * this.spring;
-    this.value += this.vel;
-    this._draw(performance.now()/1000);
-  }
-  _draw(t){
-    const ctx=this.ctx, W=this.c.width, H=this.c.height; if (!W || !H) return;
-    ctx.clearRect(0,0,W,H);
-    if(this._bg) ctx.drawImage(this._bg.canvas, 0, 0);
-
-    const R = this._bg?.R || Math.min(W,H)*0.46;
-    const inner = this._bg?.inner || R*0.64;
-    const midR = this._bg?.midR || (R+inner)/2;
-    const lw = this._bg?.lw || (R-inner);
-
-    ctx.save(); ctx.translate(W/2,H/2); ctx.rotate(-Math.PI/2);
-    ctx.lineWidth = lw; ctx.lineCap='round'; ctx.lineJoin='round';
-
-    const p=clamp01(this.value), maxAng=p*Math.PI*2;
-    const baseSegs = PERF_LOW ? 72 : 132;
-    const sizeAdj = Math.max(0.85, Math.min(1.35, Math.sqrt(Math.min(W,H)/520)));
-    const segs=Math.round(baseSegs*sizeAdj);
-
-    for(let i=0;i<segs;i++){
-      const t0=i/segs; if(t0>=p) break;
-      const a0=t0*maxAng, a1=((i+1)/segs)*maxAng - 0.0006;
-      ctx.beginPath();
-      ctx.strokeStyle = this._colorAt(t0);
-      ctx.arc(0,0,midR, a0, a1);
-      ctx.stroke();
-    }
-
-    if(!PERF_LOW){
-      const sweepHz = breath.sweep || 0.07;
-      const sweepAng = (t * sweepHz) % (Math.PI*2);
-      ctx.save(); ctx.rotate(sweepAng);
-      const dotR = Math.max(4, lw*0.20);
-      const grad = ctx.createRadialGradient(midR,0, 2, midR,0, dotR);
-      grad.addColorStop(0, 'rgba(255,255,255,.90)');
-      grad.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = grad; ctx.beginPath();
-      ctx.arc(midR,0, dotR, 0, Math.PI*2); ctx.fill();
-      ctx.restore();
-    }
-    ctx.restore();
-  }
-  _mix(h1,h2,k){
-    const a=parseInt(h1.slice(1),16), b=parseInt(h2.slice(1),16);
-    const r=(a>>16)&255, g=(a>>8)&255, bl=a&255;
-    const r2=(b>>16)&255, g2=(b>>8)&255, bl2=b&255;
-    const m=(x,y)=>Math.round(x+(y-x)*k);
-    return `#${m(r,r2).toString(16).padStart(2,'0')}${m(g,g2).toString(16).padStart(2,'0')}${m(bl,bl2).toString(16).padStart(2,'0')}`;
-  }
-  _colorAt(t){
-    const acc = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#49c2ff';
-    const green="#43d17a", amber="#f6c454", red="#ff6a6a";
-    const base = t<.4 ? this._mix(green, amber, t/.4) : this._mix(amber, red, (t-.4)/.6);
-    return this._mix(base, acc, 0.18);
-  }
+function RiskWheel(canvas){
+  this.c = canvas; this.ctx = canvas.getContext('2d');
+  this.pixelRatio = Math.max(1, Math.min(PERF_LOW ? 1.5 : 2, window.devicePixelRatio || 1));
+  this.value = 0.0; this.target=0.0; this.vel=0.0;
+  this.spring = prefersReduced ? 1.0 : (PERF_LOW ? 0.10 : 0.12);
+  this._bg = null;
+  this._thicknessRatio = 0.36;
+  this.resize = this.resize.bind(this);
+  new ResizeObserver(this.resize).observe(this.c);
+  var panel = document.getElementById('wheelPanel');
+  if (panel) new ResizeObserver(this.resize).observe(panel);
+  this.resize();
 }
+RiskWheel.prototype.setTarget = function(x){ this.target = clamp01(x); };
+RiskWheel.prototype.resize = function(){
+  var panel = document.getElementById('wheelPanel');
+  var rect = (panel||this.c).getBoundingClientRect();
+  var w = rect.width||0, h = rect.height||0; if (h < 2) h = w;
+  var s = Math.max(1, Math.min(w, h));
+  var px = this.pixelRatio;
+  this.c.width  = Math.round(s * px);
+  this.c.height = Math.round(s * px);
+  this._buildBackground();
+  this._draw(0);
+};
+RiskWheel.prototype._buildBackground = function(){
+  var W=this.c.width, H=this.c.height; if(!W || !H) return;
+  var off = document.createElement('canvas'); off.width=W; off.height=H;
+  var ctx=off.getContext('2d');
+
+  var sizeMin = Math.min(W,H);
+  var pad = Math.max(Math.round(sizeMin * 0.08), Math.round(30 * this.pixelRatio));
+  var R = sizeMin/2 - pad;
+  var inner = Math.max(2, R*(1 - this._thicknessRatio));
+  var midR = (R + inner)/2;
+  var lw = (R-inner);
+
+  ctx.save(); ctx.translate(W/2,H/2); ctx.rotate(-Math.PI/2);
+  ctx.lineWidth = lw; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.miterLimit=2;
+  ctx.strokeStyle='#ffffff16';
+  ctx.beginPath(); ctx.arc(0,0,midR, 0, Math.PI*2); ctx.stroke();
+  ctx.restore();
+
+  this._bg = {canvas: off, R: R, inner: inner, midR: midR, lw: lw};
+};
+RiskWheel.prototype.tick = function(){
+  var d = this.target - this.value;
+  this.vel = this.vel * 0.82 + d * this.spring;
+  this.value += this.vel;
+  this._draw(performance.now()/1000);
+};
+RiskWheel.prototype._mix = function(h1,h2,k){
+  var a=parseInt(h1.slice(1),16), b=parseInt(h2.slice(1),16);
+  var r=(a>>16)&255, g=(a>>8)&255, bl=a&255;
+  var r2=(b>>16)&255, g2=(b>>8)&255, bl2=b&255;
+  var m=function(x,y){ return Math.round(x+(y-x)*k); };
+  return "#" + m(r,r2).toString(16).padStart(2,'0') +
+               m(g,g2).toString(16).padStart(2,'0') +
+               m(bl,bl2).toString(16).padStart(2,'0');
+};
+RiskWheel.prototype._colorAt = function(t){
+  var acc = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#49c2ff';
+  var green="#43d17a", amber="#f6c454", red="#ff6a6a";
+  var base = t<0.4 ? this._mix(green, amber, t/0.4) : this._mix(amber, red, (t-0.4)/0.6);
+  return this._mix(base, acc, 0.18);
+};
+RiskWheel.prototype._draw = function(t){
+  var ctx=this.ctx, W=this.c.width, H=this.c.height; if (!W || !H) return;
+  ctx.clearRect(0,0,W,H);
+  if(this._bg) ctx.drawImage(this._bg.canvas, 0, 0);
+
+  var R = this._bg ? this._bg.R : Math.min(W,H)*0.46;
+  var inner = this._bg ? this._bg.inner : R*0.64;
+  var midR = this._bg ? this._bg.midR : (R+inner)/2;
+  var lw = this._bg ? this._bg.lw : (R-inner);
+
+  ctx.save(); ctx.translate(W/2,H/2); ctx.rotate(-Math.PI/2);
+  ctx.lineWidth = lw; ctx.lineCap='round'; ctx.lineJoin='round';
+
+  var p=clamp01(this.value), maxAng=p*Math.PI*2;
+  var baseSegs = PERF_LOW ? 72 : 132;
+  var sizeAdj = Math.max(0.85, Math.min(1.35, Math.sqrt(Math.min(W,H)/520)));
+  var segs=Math.round(baseSegs*sizeAdj);
+
+  for(var i=0;i<segs;i++){
+    var t0=i/segs; if(t0>=p) break;
+    var a0=t0*maxAng, a1=((i+1)/segs)*maxAng - 0.0006;
+    ctx.beginPath();
+    ctx.strokeStyle = this._colorAt(t0);
+    ctx.arc(0,0,midR, a0, a1);
+    ctx.stroke();
+  }
+
+  if(!PERF_LOW){
+    var sweepHz = breath.sweep || 0.07;
+    var sweepAng = (t * sweepHz) % (Math.PI*2);
+    ctx.save(); ctx.rotate(sweepAng);
+    var dotR = Math.max(4, lw*0.20);
+    var grad = ctx.createRadialGradient(midR,0, 2, midR,0, dotR);
+    grad.addColorStop(0, 'rgba(255,255,255,.90)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = grad; ctx.beginPath();
+    ctx.arc(midR,0, dotR, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+};
 
 /* =====================
    Store + bindings + smoothing
 ====================== */
-const wheel = new RiskWheel(document.getElementById('wheelCanvas'));
-const hudNumber=$('#hudNumber'), hudLabel=$('#hudLabel'), hudNote=$('#hudNote']);
-const reasonsList=$('#reasonsList'), confidencePill=$('#confidencePill'), debugBox=$('#debugBox');
-const btnRefresh=$('#btnRefresh'), btnAuto=$('#btnAuto'), btnDebug=$('#btnDebug']);
+var wheel = new RiskWheel(document.getElementById('wheelCanvas'));
+var hudNumber=$('#hudNumber'), hudLabel=$('#hudLabel'), hudNote=$('#hudNote');
+var reasonsList=$('#reasonsList'), confidencePill=$('#confidencePill'), debugBox=$('#debugBox');
+var btnRefresh=$('#btnRefresh'), btnAuto=$('#btnAuto'), btnDebug=$('#btnDebug');
 
-const current = { harm:0, last:null, label:'INITIALIZING' };
-const smooth = { ema: null, alphaBase: 0.35, hysteresis: 0.03 };
+var current = { harm:0, last:null, label:'INITIALIZING' };
+var smooth = { ema: null, alphaBase: 0.35, hysteresis: 0.03 };
 
 function labelWithHysteresis(pct){
-  const tLow=40, tHigh=75, h=smooth.hysteresis*100;
-  const prev=current.label || 'LOW';
+  var tLow=40, tHigh=75, h=smooth.hysteresis*100;
+  var prev=current.label || 'LOW';
   if(prev==='LOW'){ if(pct > tLow + h) return (pct < tHigh ? 'MODERATE' : 'HIGH'); return 'LOW'; }
   if(prev==='MODERATE'){ if(pct >= tHigh + h) return 'HIGH'; if(pct <= tLow - h) return 'LOW'; return 'MODERATE'; }
   return (pct < tHigh - h ? (pct <= tLow ? 'LOW':'MODERATE') : 'HIGH');
 }
 
 function setHUD(j){
-  const pctRaw = clamp01(j.harm_ratio||0)*100;
-  const conf = clamp01(j.confidence==null ? 0.6 : j.confidence);
-  const alpha = Math.min(0.8, Math.max(0.15, smooth.alphaBase * (0.5 + 0.7*conf)));
+  var pctRaw = clamp01(j.harm_ratio||0)*100;
+  var conf = clamp01(j.confidence==null ? 0.6 : j.confidence);
+  var alpha = Math.min(0.8, Math.max(0.15, smooth.alphaBase * (0.5 + 0.7*conf)));
   smooth.ema = (smooth.ema==null) ? pctRaw : (smooth.ema*(1-alpha) + pctRaw*alpha);
-  const pct = Math.round(smooth.ema);
+  var pct = Math.round(smooth.ema);
 
-  const fallback = labelWithHysteresis(pct);
+  var fallback = labelWithHysteresis(pct);
   current.label = (j.label ? String(j.label).toUpperCase() : fallback);
 
   hudNumber.textContent = pct + "%";
@@ -4255,9 +4266,10 @@ function setHUD(j){
   if (j.color){ document.documentElement.style.setProperty('--accent', j.color); }
   confidencePill.textContent = "Confidence: " + (j.confidence!=null ? Math.round(conf*100) : "--") + "%";
   reasonsList.innerHTML="";
-  (Array.isArray(j.reasons)? j.reasons.slice(0,8):["Collecting details…"]).forEach(x=>{
-    const li=document.createElement('li'); li.textContent=x; reasonsList.appendChild(li);
-  });
+  var items = Array.isArray(j.reasons) ? j.reasons.slice(0,8) : ["Collecting details…"];
+  for (var i=0; i<items.length; i++){
+    var li=document.createElement('li'); li.textContent=items[i]; reasonsList.appendChild(li);
+  }
   if (btnDebug.getAttribute('aria-pressed')==='true'){
     debugBox.textContent = JSON.stringify(j, null, 2);
   }
@@ -4265,12 +4277,12 @@ function setHUD(j){
 
 function applyReading(j){
   if(!j || typeof j.harm_ratio!=='number') return;
-  const now = Date.now();
+  var now = Date.now();
   if (lastApplyAt && (now - lastApplyAt) < MIN_UPDATE_MS) return;
   lastApplyAt = now;
 
   current.last=j;
-  const harmClamped = clamp01(j.harm_ratio);
+  var harmClamped = clamp01(j.harm_ratio);
   current.harm = harmClamped;
   wheel.setTarget(harmClamped);
   breath.setFromRisk(harmClamped, {confidence: j.confidence});
@@ -4280,55 +4292,62 @@ function applyReading(j){
 /* =====================
    controls
 ====================== */
-btnRefresh.onclick = ()=>fetchOnce();
-btnAuto.onclick = ()=>{ if(autoTimer){ stopAuto(); } else { startAuto(); } };
-btnDebug.onclick = ()=>{
-  const cur=btnDebug.getAttribute('aria-pressed')==='true';
-  btnDebug.setAttribute('aria-pressed', !cur);
+btnRefresh.onclick = function(){ fetchOnce(); };
+btnAuto.onclick = function(){ if(autoTimer){ stopAuto(); } else { startAuto(); } };
+btnDebug.onclick = function(){
+  var cur=btnDebug.getAttribute('aria-pressed')==='true';
+  btnDebug.setAttribute('aria-pressed', (!cur).toString());
   btnDebug.textContent = "Debug: " + (!cur ? "On" : "Off");
   debugBox.style.display = !cur ? '' : 'none';
   if(!cur && current.last) debugBox.textContent = JSON.stringify(current.last,null,2);
 };
 
-let autoTimer=null;
+var autoTimer=null;
 function startAuto(){ stopAuto(); btnAuto.setAttribute('aria-pressed','true'); btnAuto.textContent="Auto: On"; fetchOnce(); autoTimer=setInterval(fetchOnce, 60*1000); }
-function stopAuto(){ if(autoTimer) clearInterval(autoTimer); autoTimer=null; btnAuto.setAttribute('aria-pressed','false'); btnAuto.textContent="Auto: Off"; }
+function stopAuto(){ if(autoTimer){ clearInterval(autoTimer); } autoTimer=null; btnAuto.setAttribute('aria-pressed','false'); btnAuto.textContent="Auto: Off"; }
 
 /* ================
-   LLM-only fetch (POST + CSRF) — CURRENT LOCATION ONLY
+   LLM-only fetch (POST + CSRF)
+   with safe geolocation fallback to 0,0
 =================== */
-const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content;
+var metaCsrf = document.querySelector('meta[name="csrf-token"]');
+var CSRF_TOKEN = metaCsrf ? metaCsrf.getAttribute('content') : '';
 
-async function currentLatLon(){
-  if(!('geolocation' in navigator)) return {lat:0, lon:0, source:'none'};
-  return new Promise((resolve)=>{
+function getCoords(){
+  return new Promise(function(resolve){
+    if (!navigator.geolocation){
+      return resolve({lat:0, lon:0});
+    }
     navigator.geolocation.getCurrentPosition(
-      pos => resolve({
-        lat: (pos.coords && Number.isFinite(pos.coords.latitude)) ? pos.coords.latitude : 0,
-        lon: (pos.coords && Number.isFinite(pos.coords.longitude)) ? pos.coords.longitude : 0,
-        source: 'geo'
-      }),
-      _err => resolve({lat:0, lon:0, source:'fallback'}),
-      {enableHighAccuracy:true, maximumAge: 60000, timeout: 4000}
+      function(pos){
+        try{
+          var lat = Number(pos.coords.latitude);  if(!isFinite(lat)) lat = 0;
+          var lon = Number(pos.coords.longitude); if(!isFinite(lon)) lon = 0;
+          resolve({lat:lat, lon:lon});
+        }catch(e){
+          resolve({lat:0, lon:0});
+        }
+      },
+      function(){ resolve({lat:0, lon:0}); },
+      {enableHighAccuracy:false, maximumAge:60000, timeout:4000}
     );
   });
 }
 
 async function fetchOnce(){
-  const coords = await currentLatLon();
-  const payload = {
-    lat: Number.isFinite(coords.lat) ? coords.lat : 0,
-    lon: Number.isFinite(coords.lon) ? coords.lon : 0,
+  var coords = await getCoords();
+  var j = await postJson('/api/risk/llm_route', {
+    lat: coords.lat,
+    lon: coords.lon,
     reason: 'home_refresh',
     ts: Date.now()
-  };
-  const j = await postJson('/api/risk/llm_route', payload);
+  });
   applyReading(j || {});
 }
 
 async function postJson(url, data){
   try{
-    const r = await fetch(url, {
+    var r = await fetch(url, {
       method: 'POST',
       credentials: 'same-origin',
       headers: {
@@ -4350,6 +4369,7 @@ startAuto();
 </body>
 </html>
     """, seed_hex=seed_hex, seed_code=seed_code, csrf_token=csrf_token)
+
 
 
 
