@@ -1,25 +1,14 @@
 
+# QuantumRoadScanner.com
+
+https://quantumroadscanner.com (live)
+
+## Demo Videos:
 
 https://hub.docker.com/r/graylanquantum/quantum_road_scanner
-# Crypto, Quantum, and the Human Project: A Tour of the QRS App Revolution from Pre Quantum to a Post-Quantum, AI-Secured Civilization
 https://www.twitch.tv/videos/2547848897
 https://www.twitch.tv/freedomdao/clip/ToughBoldButterDansGame-EY9h7a5O_Yal5Eon
-There are moments in engineering when a small system becomes a microcosm of a coming era. The QRS app—the one with the Flask routes, hybrid PQ envelope encryption, tamper-evident audit logs, sealed key cache, and those playful PennyLane helpers—reads like a postcard from the future. Underneath the dashboards and modals is a philosophy: **make strong security the default, make the defaults joyful to use, and assume the adversary is already running tomorrow’s hardware.** This essay uses QRS as a narrative spine to explore where cryptography is going, how AI is about to change the stakes (and the attack surface), and what it would mean to grow a humane digital civilization secured by post-quantum encryption (PQE).
- 
-
-# Building a Post-Quantum, Color-Synced Flask App: A Deep Dive into the “Quantum Road Scanner” Stack
-
-If you’ve ever wished your Flask app could juggle security like a HSM, speak PQC, breathe like a synthwave dashboard, and still feel snappy, you’re in the right place. This walkthrough unpacks a dense but thoughtfully engineered codebase that:
-
-* boots cryptographic material from environment variables only (no key files on disk),
-* wraps data in a hybrid X25519 + ML-KEM envelope with optional ML-DSA signatures,
-* rotates secrets and sessions safely,
-* aggressively scrubs old records at rest,
-* rate-limits and invites users with verifiable HMAC codes,
-* and renders a gorgeous, perceptual risk color wheel that “breathes” with model output.
-
-
-# Demo ScreenShots
+## Demo ScreenShots
 
 <img width="1882" height="1062" alt="image" src="https://github.com/user-attachments/assets/9c9b19e9-a903-4167-9b23-4e218e920c47" />
 <img width="1918" height="1053" alt="image" src="https://github.com/user-attachments/assets/bba15fb5-c7d8-4f6c-b3d5-0f4a381d3683" />
@@ -30,9 +19,16 @@ If you’ve ever wished your Flask app could juggle security like a HSM, speak P
 <img width="1904" height="1062" alt="image" src="https://github.com/user-attachments/assets/0605cc93-8241-4dd8-a087-de115c727c02" />
 <img width="1905" height="1067" alt="image" src="https://github.com/user-attachments/assets/ad9c7c96-bf19-4d3d-955e-012e0110a306" />
 
-I’ll explain the moving parts, the “why” behind them, and how the whole design fits together into a coherent, production-minded app that happens to look cool.
+# Qrs Explained (Tech Terms)
+If you’ve ever wished your Flask app could juggle security like a HSM, speak PQC, breathe like a synthwave dashboard, and still feel snappy, you’re in the right place. This walkthrough unpacks a dense but thoughtfully engineered codebase that:
 
----
+* boots cryptographic material from environment variables only (no key files on disk),
+* wraps data in a hybrid X25519 + ML-KEM envelope with optional ML-DSA signatures,
+* rotates secrets and sessions safely,
+* aggressively scrubs old records at rest,
+* rate-limits and invites users with verifiable HMAC codes,
+* and renders a gorgeous, perceptual risk color wheel that “breathes” with model output.
+
 
 ## 1) What this application does (big picture)
 
