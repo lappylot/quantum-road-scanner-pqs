@@ -20,289 +20,194 @@ https://www.twitch.tv/freedomdao/clip/ToughBoldButterDansGame-EY9h7a5O_Yal5Eon
 <img width="1905" height="1067" alt="image" src="https://github.com/user-attachments/assets/ad9c7c96-bf19-4d3d-955e-012e0110a306" />
 
 # Qrs Explained (Tech Terms)
-
 ```mermaid
-flowchart TB
-  %% ===================================================================
-  %% ONE HUGE DIAGRAM: ARCHITECTURE + MAJOR FLOWS (QRS Flask Application)
-  %% ===================================================================
+%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis"}}}%%
+flowchart LR
 
-  %% -------------------------
-  %% CLIENT / BROWSER
-  %% -------------------------
-  subgraph CLIENT["Client / Browser UI"]
-    B[Browser UI<br/>Wheel + HUD + Controls]
-    GEOLOC[navigator.geolocation]
-    CSRF_META[CSRF meta tag]
-    COOKIES[Cookie: qrs_fp]
-  end
+%% =============== CLIENT =================
+subgraph CLIENT
+  UI["Dashboard UI<br/>(Home, Wheel, Controls)"]
+  NAV["Navigation<br/>/home, /login, /register, /settings, /view_report/:id"]
+  COOK["Browser Cookies<br/>session, qrs_fp"]
+end
 
-  %% -------------------------
-  %% FLASK APP & MIDDLEWARE
-  %% -------------------------
-  subgraph APP["Flask App (QRS)"]
-    direction TB
-    PF[ProxyFix]
-    SO[_StartupOnceMiddleware<br/>(start_background_jobs_once)]
-    CSRFMW[Flask-WTF CSRF]
-    SESS[MultiKeySessionInterface<br/>(rotating secret keys)]
-    CSP[after_request -> CSP headers]
+%% =============== APP / WSGI =============
+subgraph APP
+  PF["ProxyFix"]
+  SO["StartupOnceMiddleware<br/>(start_background_jobs_once)"]
+  SIF["MultiKeySessionInterface<br/>URLSafeTimedSerializer + TaggedJSONSerializer<br/>Cookie load/save using recent keys"]
+  CSRF["CSRFProtect (Flask-WTF)<br/>generate_csrf for templates"]
+  BR["before_request<br/>ensure_fp → set fingerprint cookie"]
+  AR["after_request<br/>CSP headers + attach cookie helper"]
+end
 
-    subgraph EP["HTTP Endpoints"]
-      E_HEALTH[/GET /healthz/]
-      E_HOME[/GET /home/]
-      E_LOGIN[/GET+POST /login/]
-      E_REGISTER[/GET+POST /register/]
-      E_SETTINGS[/GET+POST /settings/ (admin)]
-      E_LOGOUT[/GET /logout/]
-      E_VIEW[/GET /view_report/&lt;id&gt;/]
-      E_THEME[/GET /api/theme/personalize/]
-      E_RISK_POST[/POST /api/risk/llm_route/]
-      E_RISK_SSE[/GET /api/risk/stream (SSE)/]
-    end
+PF --> SO
+SO --> SIF
+SIF --> CSRF
+BR --> AR
 
-    RL[RateLimiter<br/>(rate_limits table)]
-  end
+%% =============== ROUTES ================
+subgraph ROUTES
+  R_health["GET /healthz"]
+  R_home["GET /home<br/>renders single-page dashboard (wheel + SSE hooks)"]
+  R_login["GET/POST /login<br/>authenticate_user → Argon2id verify<br/>session['is_admin']"]
+  R_register["GET/POST /register<br/>register_user → PHF check, invite flow (optional)"]
+  R_settings["GET/POST /settings<br/>admin-only; generate invite codes"]
+  R_view["GET /view_report/:id<br/>decrypt report, compute color/risk tokens"]
+  API_theme["GET /api/theme/personalize<br/>ColorSync.sample (per-user or entropy)"]
+  API_route["POST /api/risk/llm_route<br/>build signals → prompt → _call_llm (JSON)"]
+  API_stream["GET /api/risk/stream (SSE)<br/>loop 24× → signals → _call_llm"]
+end
 
-  %% -------------------------
-  %% HELPERS / DOMAIN LOGIC
-  %% -------------------------
-  subgraph HELPERS["Helpers & Domain Logic"]
-    SAN[sanitize_input()<br/>bleach.clean()]
-    GEOCORE[approximate_nearest_city()<br/>reverse_geocode()<br/>quantum_haversine_*()]
-    SIGNALS[_system_signals()<br/>(psutil, rng, optional quantum)]
-    QS[_quantum_features()<br/>pennylane qnode (optional)]
-    PROMPT_G[_build_guess_prompt()]
-    PROMPT_R[_build_route_prompt()]
-    COLOR[ColorSync.sample(uid)]
-    LLMCALL[_call_llm()<br/>+ run_openai_completion()]
-    HTTPX[httpx pooled client]
-  end
+APP --> ROUTES
+R_home --> UI
+R_login --> UI
+R_register --> UI
+R_settings --> UI
+R_view --> UI
+API_theme --> UI
+API_route --> UI
+API_stream --> UI
+UI -->|XHR/Fetch, SSE| ROUTES
+UI --> COOK
+COOK --> SIF
 
-  %% -------------------------
-  %% SECURITY / CRYPTO LAYER
-  %% -------------------------
-  subgraph SEC["Security & Crypto"]
-    KM[KeyManager<br/>(Scrypt, HKDF-SHA3-512,<br/>env-bound keys)]
-    SS[SealedStore<br/>(sealed ENV cache, Shamir shards)]
-    ENC[encrypt_data()<br/>(PQ2 envelope)]
-    DEC[decrypt_data()]
-    AUD[AuditTrail<br/>(encrypted, chained log)]
-    KEM[X25519 ECDH + ML-KEM (Kyber)]
-    SIG[ML-DSA (Dilithium) / Ed25519]
-    AEAD[AES-GCM (data + wrap)]
-    POL[POLICY flags<br/>STRICT_PQ2_ONLY, require_sig, etc.]
-    ENVV[(ENV secrets & keys)<br/>salt, PQ alg, pub/priv(enc),<br/>sig alg, passphrase]
-  end
+%% =============== BACKGROUND JOBS ========
+subgraph BACKGROUND
+  BG_lock["File/ENV lock<br/>/tmp/qrs_bg.lock"]
+  BG_start["start_background_jobs_once<br/>guarded by lock"]
+  BG_rotate["rotate_secret_key thread<br/>updates app.secret_key; keep RECENT_KEYS"]
+  BG_expire["delete_expired_data thread<br/>7-pass overwrite → DELETE → VACUUM ×3"]
+end
 
-  %% -------------------------
-  %% PERSISTENCE (SQLITE)
-  %% -------------------------
-  subgraph DB["SQLite (WAL)"]
-    T_USERS[(users)]
-    T_REPORTS[(hazard_reports)]
-    T_CFG[(config)]
-    T_RATES[(rate_limits)]
-    T_INV[(invite_codes)]
-    T_ENT[(entropy_logs)]
-  end
+SO --> BG_lock --> BG_start
+BG_start --> BG_rotate
+BG_start --> BG_expire
 
-  %% -------------------------
-  %% BACKGROUND JOBS
-  %% -------------------------
-  subgraph BG["Background Jobs (single host)"]
-    LOCK[file lock (fcntl) / env flag]
-    ROTATE[rotate_secret_key()<br/>(RECENT_KEYS deque)]
-    SCRUB[delete_expired_data()<br/>(secure overwrite + VACUUM)]
-  end
+%% =============== SECURITY / KEYS ========
+subgraph KEYMGMT
+  KM["KeyManager<br/>derive key via Scrypt(salt=ENV_SALT_B64)<br/>get_key()"]
+  KM_hybrid["_load_or_create_hybrid_keys<br/>X25519 pub/priv (AES-GCM wrapped)<br/>ML-KEM pub/priv (if liboqs)<br/>STRICT_PQ2_ONLY checks"]
+  KM_sign["_load_or_create_signing<br/>ML-DSA (Dilithium) or Ed25519<br/>priv wrapped via AES-GCM"]
+  KM_sealed["SealedStore<br/>seal/unseal raw x25519/pq/sig keys<br/>ENV_SEALED_B64 + optional Shamir shards"]
+  KM_audit["AuditTrail<br/>append/verify/tail (AES-GCM + chain hash)"]
+end
 
-  %% -------------------------
-  %% EXTERNAL SYSTEMS
-  %% -------------------------
-  subgraph EXT["External Systems"]
-    OPENAI[(OpenAI APIs)]
-    OQS[(liboqs)]
-    OSRND[(OS entropy, psutil,<br/>time, uuid, urandom)]
-    GEONAMES[(geonamescache)]
-  end
+KM --> KM_hybrid
+KM --> KM_sign
+KM --> KM_sealed
+KM --> KM_audit
 
-  %% ==========================
-  %% MIDDLEWARE & REQUEST ENTRY
-  %% ==========================
-  B -->|HTTP(S) requests| PF --> SO --> CSRFMW --> SESS --> CSP
-  B -.cookies.-> COOKIES
-  B -.reads token.-> CSRF_META
-  SESS <---> ROTATE
-  SO --> BG
-  BG --> LOCK
-  BG --> ROTATE
-  BG --> SCRUB
+%% =============== CRYPTO OPS =============
+subgraph CRYPTO
+  ENC["encrypt_data<br/>compress → DEK (AES-GCM)<br/>hybrid wrap DEK using X25519+ML-KEM<br/>HKDF(SHA3-512) w/ color & HD ctx<br/>sign envelope (ML-DSA/Ed25519)"]
+  DEC["decrypt_data<br/>verify sig → derive wrap key → unwrap DEK → AES-GCM decrypt<br/>optional domain HD key"]
+  HK["HKDF SHA3-512"]
+  A2["Argon2id<br/>hash_secret_raw / PasswordHasher"]
+end
 
-  %% ==========================
-  %% THEME PERSONALIZATION FLOW
-  %% ==========================
-  B -->|GET /api/theme/personalize| E_THEME
-  E_THEME --> COLOR --> E_THEME
-  E_THEME -->|JSON {hex, code}| B
+KM_hybrid --> ENC
+KM_sign --> ENC
+HK --> ENC
+KM_sign --> DEC
+KM_hybrid --> DEC
+HK --> DEC
 
-  %% ==========================
-  %% RISK (ROUTE) FLOW (POST)
-  %% ==========================
-  B -->|POST /api/risk/llm_route {lat,lon,...}| E_RISK_POST
-  E_RISK_POST --> RL
-  RL -->|allow| E_RISK_POST
-  RL -.->|429 block| B
+%% =============== QUANTUM / SIGNALS =====
+subgraph QUANTUM
+  Q_scan["quantum_hazard_scan<br/>PennyLane default.qubit (5 wires)"]
+  Q_feat["_quantum_features / _system_signals<br/>cpu/ram + RNG + parity/top3"]
+  ColorSync["ColorSync<br/>entropy/accent tone; OKLCH approx"]
+end
 
-  E_RISK_POST --> SAN
-  E_RISK_POST --> SIGNALS
-  SIGNALS --> QS
-  E_RISK_POST --> GEOCORE
-  E_RISK_POST --> PROMPT_R
-  PROMPT_R --> LLMCALL
-  LLMCALL --> HTTPX --> OPENAI --> HTTPX --> LLMCALL
-  LLMCALL --> E_RISK_POST
+Q_scan --> Q_feat
+ColorSync --> API_theme
+Q_feat --> API_route
+Q_feat --> API_stream
 
-  %% persist & audit
-  E_RISK_POST --> AUD
-  E_RISK_POST --> ENC
-  ENC --> KM
-  KM <--> SS
-  KM <-- ENVV
-  KM --> KEM
-  KM --> SIG
-  ENC --> AEAD
-  ENC -->|PQ2 envelope (PQ2.&lt;b64&gt;)| T_REPORTS
+%% =============== LLM / OPENAI ==========
+subgraph LLM
+  L_call["_call_llm (httpx)<br/>/v1/chat/completions (gpt-4o-mini)<br/>response_format=json_object"]
+  L_resp["run_openai_completion (async)<br/>/v1/responses (gpt-5)<br/>robust text extraction"]
+  PHF["phf_filter_input (async)<br/>probabilistic harm filter (fallback safe)"]
+end
 
-  E_RISK_POST -->|200 JSON (risk + server_enriched)| B
+API_route --> L_call --> OPENAI
+API_stream --> L_call
+R_register --> PHF
+PHF --> R_register
+L_resp --> R_register
 
-  %% ==========================
-  %% RISK (GUESS) FLOW (SSE)
-  %% ==========================
-  B -->|GET /api/risk/stream| E_RISK_SSE
-  E_RISK_SSE --> SIGNALS --> QS
-  E_RISK_SSE --> PROMPT_G --> LLMCALL --> HTTPX --> OPENAI --> HTTPX --> LLMCALL
-  LLMCALL --> E_RISK_SSE -->|SSE data: risk ticks| B
+%% =============== EXTERNAL ==============
+subgraph EXTERNAL
+  OPENAI["OpenAI APIs<br/>/v1/chat/completions<br/>/v1/responses"]
+  OQS["liboqs (optional)<br/>ML-KEM / ML-DSA backends"]
+end
 
-  %% ==========================
-  %% LOGIN / REGISTER FLOWS
-  %% ==========================
-  B -->|GET/POST /login| E_LOGIN
-  E_LOGIN --> SAN
-  E_LOGIN --> T_USERS
-  E_LOGIN --> RL
-  E_LOGIN -->|session set| SESS
-  E_LOGIN -->|redirect| B
+OQS --> KM_hybrid
+OQS --> KM_sign
 
-  B -->|GET/POST /register| E_REGISTER
-  E_REGISTER --> SAN
-  E_REGISTER -->|invite check| T_INV
-  E_REGISTER -->|password hash Argon2id| OSRND
-  E_REGISTER --> T_USERS
-  E_REGISTER -->|set session| SESS
-  E_REGISTER --> B
+%% =============== DATABASE ==============
+subgraph DB
+  DB_file["SQLite file<br/>/var/data/secure_data.db"]
+  DB_tables["Tables<br/>users, hazard_reports, config,<br/>rate_limits, invite_codes, entropy_logs"]
+end
 
-  B -->|GET /settings| E_SETTINGS
-  E_SETTINGS -->|admin check| SESS
-  E_SETTINGS --> T_INV
-  E_SETTINGS -->|generate invite (HMAC w/ SECRET_KEY)| OSRND
-  E_SETTINGS --> B
+DB_file --> DB_tables
 
-  B -->|GET /logout| E_LOGOUT --> SESS --> B
+%% Writes with encryption
+R_register -->|create user| ENC --> DB_tables
+R_login -->|verify Argon2id| DB_tables
+API_route -->|save_hazard_report (fields encrypted)| ENC --> DB_tables
+R_view -->|decrypt report| DEC --> DB_tables
+R_settings -->|insert invite code| DB_tables
+BG_expire -->|overwrite & delete| DB_tables
 
-  %% ==========================
-  %% VIEW REPORT (DECRYPT PATH)
-  %% ==========================
-  B -->|GET /view_report/:id| E_VIEW
-  E_VIEW -->|fetch ciphertext| T_REPORTS
-  E_VIEW --> DEC
-  DEC --> KM
-  DEC --> AEAD
-  DEC --> KEM
-  DEC --> SIG
-  DEC -->|plaintext report| E_VIEW --> B
+%% =============== FILES / AUDIT =========
+subgraph FILES
+  F_audit["sealed_store/audit.log<br/>AES-GCM encrypted entries<br/>hash-chained"]
+  F_hd["sealed_store/hd_epoch.json<br/>epoch rotations for HD keys"]
+end
 
-  %% ==========================
-  %% BACKGROUND: SCRUB EXPIRED
-  %% ==========================
-  SCRUB -->|compute expiration| T_REPORTS
-  SCRUB -->|secure overwrite passes| T_REPORTS
-  SCRUB -->|DELETE expired| T_REPORTS
-  SCRUB -->|secure overwrite| T_ENT
-  SCRUB -->|DELETE expired| T_ENT
-  SCRUB -->|VACUUM (×3)| DB
+KM_audit --> F_audit
+F_hd --> ENC
+F_hd --> DEC
 
-  %% ==========================
-  %% CRYPTO ENVELOPE DETAIL (INLINE)
-  %% ==========================
-  subgraph PQ2["PQ2 Envelope (encrypt_data/decrypt_data)"]
-    direction TB
-    P1[Data -> compress (zstd/deflate/none)]
-    P2[Generate DEK (32B)]
-    P3[X25519 eph -> shared secret ss_x]
-    P4[ML-KEM encap -> pq_ct, ss_pq]
-    P5[HKDF-SHA3 on (ss_x+ss_pq+dk?) -> wrap_key]
-    P6[AES-GCM(wrap_key) encrypt DEK -> dek_wrapped]
-    P7[AES-GCM(DEK) encrypt data -> data_ct]
-    P8[Sign core (Dilithium/Ed25519)]
-    P9[Assemble JSON env (alg, pq_ct, x_eph_pub, nonces, comp meta, sig...)]
-    P10[Prefix "PQ2." + base64url(env)]
-  end
+%% =============== ENV / CONFIG ==========
+subgraph ENV
+  E_vars["ENV vars<br/>INVITE_CODE_SECRET_KEY, ENCRYPTION_PASSPHRASE,<br/>QRS_* salts/keys, REGISTRATION_ENABLED, STRICT_PQ2_ONLY"]
+  E_sealed["ENV_SEALED_B64<br/>sealed keys blob"]
+end
 
-  ENC --> P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8 --> P9 --> P10
-  P10 -.stored in.-> T_REPORTS
+E_vars --> KM
+E_sealed --> KM_sealed
+KM_sealed --> E_sealed
 
-  %% Decrypt side
-  subgraph PQ2D["PQ2 Decrypt"]
-    direction TB
-    D1[Parse PQ2. + b64url -> env]
-    D2[Verify signature (pub in env matches KM.sig_pub)]
-    D3[Derive wrap_key via HKDF-SHA3(ss_x + ss_pq + dk?)]
-    D4[AES-GCM unwrap DEK]
-    D5[AES-GCM decrypt data_ct]
-    D6[Decompress (if any)]
-  end
-  DEC --> D1 --> D2 --> D3 --> D4 --> D5 --> D6 --> E_VIEW
+%% =============== SESSION FLOW ==========
+BG_rotate --> SIF
+SIF --> COOK
 
-  %% ==========================
-  %% ENV / KEYS / AUDIT
-  %% ==========================
-  ENVV -.provides salts & enc-privs.-> KM
-  SS <--> KM
-  AUD -->|append encrypted chained log| OSRND
-  AUD -.-> DB
+%% =============== CLIENT ↔ APP ==========
+CLIENT -->|HTTP/S| APP
+APP -->|HTML/CSS/JS + CSRF token| CLIENT
+CLIENT -->|Fetch /api/theme/personalize| API_theme
+CLIENT -->|POST /api/risk/llm_route| API_route
+CLIENT -->|SSE /api/risk/stream| API_stream
+CLIENT -->|Forms /login /register| R_login
+CLIENT -->|Forms /register| R_register
+CLIENT -->|GET /view_report/:id| R_view
 
-  %% ==========================
-  %% HEALTH & HOME
-  %% ==========================
-  B -->|GET /healthz| E_HEALTH --> B
-  B -->|GET /home| E_HOME --> COLOR --> E_HOME --> B
+%% =============== MISC UTILS ============
+subgraph UTILS
+  Utils_sql["quote_ident / safe SQL checks"]
+  Utils_geo["reverse_geocode + geonamescache<br/>quantum_haversine_distance"]
+  Utils_rate["rate limits per user<br/>window + counters"]
+end
 
-  %% ==========================
-  %% EXT COUPLINGS
-  %% ==========================
-  KM <--> OQS
-  KM <--> OSRND
-  GEOCORE <--> GEONAMES
-  SCRUB <--> OSRND
-  SIGNALS <--> OSRND
+Utils_geo --> R_view
+Utils_rate --> API_route
+Utils_rate --> API_stream
 
-  %% ==========================
-  %% LEGEND (clusters only)
-  %% ==========================
-  classDef client fill:#0ea5,stroke:#034,stroke-width:1px,color:#001,opacity:0.95
-  classDef app fill:#183b64,stroke:#0a2340,stroke-width:1px,color:#eef
-  classDef helpers fill:#21456f,stroke:#0a2340,stroke-width:1px,color:#eef
-  classDef sec fill:#2a2855,stroke:#12123a,stroke-width:1px,color:#eef
-  classDef db fill:#2b3a2b,stroke:#102810,stroke-width:1px,color:#efe
-  classDef bg fill:#3b2e2e,stroke:#221515,stroke-width:1px,color:#fee
-  classDef ext fill:#3a3a3a,stroke:#1c1c1c,stroke-width:1px,color:#eee
-  class CLIENT client
-  class APP app
-  class HELPERS helpers
-  class SEC sec
-  class DB db
-  class BG bg
-  class EXT ext
 ```
 If you’ve ever wished your Flask app could juggle security like a HSM, speak PQC, breathe like a synthwave dashboard, and still feel snappy, you’re in the right place. This walkthrough unpacks a dense but thoughtfully engineered codebase that:
 
