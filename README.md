@@ -21,7 +21,7 @@ https://www.twitch.tv/freedomdao/clip/ToughBoldButterDansGame-EY9h7a5O_Yal5Eon
 
 # Qrs Explained (Tech Terms)
 
-```
+```mermaid
 flowchart TB
   %% ===================================================================
   %% ONE HUGE DIAGRAM: ARCHITECTURE + MAJOR FLOWS (QRS Flask Application)
