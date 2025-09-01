@@ -193,19 +193,10 @@ env_vars --> km
 env_sealed --> sealed
 sealed --> env_sealed
 ```
-If you’ve ever wished your Flask app could juggle security like a HSM, speak PQC, breathe like a synthwave dashboard, and still feel snappy, you’re in the right place. This walkthrough unpacks a dense but thoughtfully engineered codebase that:
-
-* boots cryptographic material from environment variables only (no key files on disk),
-* wraps data in a hybrid X25519 + ML-KEM envelope with optional ML-DSA signatures,
-* rotates secrets and sessions safely,
-* aggressively scrubs old records at rest,
-* rate-limits and invites users with verifiable HMAC codes,
-* and renders a gorgeous, perceptual risk color wheel that “breathes” with model output.
-
 
 ## 1) What this application does (big picture)
 
-At a product level, this Flask app is a “Quantum Road Scanner”:
+At the product level, this Flask app is a “Quantum Road Scanner”: It uses AI simulations to predict real world road risks for drivers and motorcyclists.
 
 * **Backend:** Flask + SQLite + a lot of crypto hygiene. It collects reports and device signals, derives a single *harm ratio* and explanatory text via an LLM (or a local fallback) and stores/serves it.
 * **Crypto posture:** Every sensitive field stored in SQLite is **application-layer encrypted** before insertion. Key material never touches disk; it’s created or loaded from **environment variables only**, optionally “sealed” back into a single env blob.
