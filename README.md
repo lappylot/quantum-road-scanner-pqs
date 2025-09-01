@@ -21,76 +21,72 @@ https://www.twitch.tv/freedomdao/clip/ToughBoldButterDansGame-EY9h7a5O_Yal5Eon
 
 # Qrs Explained (Tech Terms)
 ```mermaid
-%%{init: {"flowchart": {"htmlLabels": true, "curve": "basis"}}}%%
 flowchart LR
 
-%% =============== CLIENT =================
+%% ================= CLIENT =================
 subgraph CLIENT
-  UI["Dashboard UI<br/>(Home, Wheel, Controls)"]
-  NAV["Navigation<br/>/home, /login, /register, /settings, /view_report/:id"]
-  COOK["Browser Cookies<br/>session, qrs_fp"]
+  UI[Dashboard UI]
+  NAV[User navigation: /home, /login, /register, /settings, /view_report/:id]
+  COOK[Browser cookies: session, qrs_fp]
 end
 
-%% =============== APP / WSGI =============
+%% ================= APP / WSGI =============
 subgraph APP
-  PF["ProxyFix"]
-  SO["StartupOnceMiddleware<br/>(start_background_jobs_once)"]
-  SIF["MultiKeySessionInterface<br/>URLSafeTimedSerializer + TaggedJSONSerializer<br/>Cookie load/save using recent keys"]
-  CSRF["CSRFProtect (Flask-WTF)<br/>generate_csrf for templates"]
-  BR["before_request<br/>ensure_fp → set fingerprint cookie"]
-  AR["after_request<br/>CSP headers + attach cookie helper"]
+  PF[ProxyFix]
+  SO[StartupOnceMiddleware]
+  SIF[MultiKeySessionInterface]
+  CSRF[CSRFProtect]
+  BEF[before_request: ensure_fp]
+  AFT[after_request: CSP and attach cookie]
 end
 
-PF --> SO
-SO --> SIF
-SIF --> CSRF
-BR --> AR
+PF --> SO --> SIF --> CSRF
+BEF --> AFT
 
-%% =============== ROUTES ================
+%% ================= ROUTES =================
 subgraph ROUTES
-  R_health["GET /healthz"]
-  R_home["GET /home<br/>renders single-page dashboard (wheel + SSE hooks)"]
-  R_login["GET/POST /login<br/>authenticate_user → Argon2id verify<br/>session['is_admin']"]
-  R_register["GET/POST /register<br/>register_user → PHF check, invite flow (optional)"]
-  R_settings["GET/POST /settings<br/>admin-only; generate invite codes"]
-  R_view["GET /view_report/:id<br/>decrypt report, compute color/risk tokens"]
-  API_theme["GET /api/theme/personalize<br/>ColorSync.sample (per-user or entropy)"]
-  API_route["POST /api/risk/llm_route<br/>build signals → prompt → _call_llm (JSON)"]
-  API_stream["GET /api/risk/stream (SSE)<br/>loop 24× → signals → _call_llm"]
+  R_health[GET /healthz]
+  R_home[GET /home]
+  R_login[GET+POST /login]
+  R_register[GET+POST /register]
+  R_settings[GET+POST /settings]
+  R_view[GET /view_report/:id]
+  API_theme[GET /api/theme/personalize]
+  API_route[POST /api/risk/llm_route]
+  API_stream[GET /api/risk/stream]
 end
 
 APP --> ROUTES
-R_home --> UI
-R_login --> UI
-R_register --> UI
-R_settings --> UI
-R_view --> UI
-API_theme --> UI
-API_route --> UI
-API_stream --> UI
-UI -->|XHR/Fetch, SSE| ROUTES
+UI <---> R_home
+UI <---> R_login
+UI <---> R_register
+UI <---> R_settings
+UI <---> R_view
+UI <---> API_theme
+UI <---> API_route
+UI <---> API_stream
 UI --> COOK
 COOK --> SIF
 
-%% =============== BACKGROUND JOBS ========
+%% ============== BACKGROUND JOBS ===========
 subgraph BACKGROUND
-  BG_lock["File/ENV lock<br/>/tmp/qrs_bg.lock"]
-  BG_start["start_background_jobs_once<br/>guarded by lock"]
-  BG_rotate["rotate_secret_key thread<br/>updates app.secret_key; keep RECENT_KEYS"]
-  BG_expire["delete_expired_data thread<br/>7-pass overwrite → DELETE → VACUUM ×3"]
+  BG_lock[BG lock (/tmp/qrs_bg.lock or ENV)]
+  BG_start[start_background_jobs_once]
+  BG_rotate[rotate_secret_key thread]
+  BG_expire[delete_expired_data thread]
 end
 
 SO --> BG_lock --> BG_start
 BG_start --> BG_rotate
 BG_start --> BG_expire
 
-%% =============== SECURITY / KEYS ========
+%% ============== KEY MANAGEMENT ============
 subgraph KEYMGMT
-  KM["KeyManager<br/>derive key via Scrypt(salt=ENV_SALT_B64)<br/>get_key()"]
-  KM_hybrid["_load_or_create_hybrid_keys<br/>X25519 pub/priv (AES-GCM wrapped)<br/>ML-KEM pub/priv (if liboqs)<br/>STRICT_PQ2_ONLY checks"]
-  KM_sign["_load_or_create_signing<br/>ML-DSA (Dilithium) or Ed25519<br/>priv wrapped via AES-GCM"]
-  KM_sealed["SealedStore<br/>seal/unseal raw x25519/pq/sig keys<br/>ENV_SEALED_B64 + optional Shamir shards"]
-  KM_audit["AuditTrail<br/>append/verify/tail (AES-GCM + chain hash)"]
+  KM[KeyManager: derive key via Scrypt]
+  KM_hybrid[Hybrid keys: X25519 + ML-KEM (liboqs)]
+  KM_sign[Signing: ML-DSA or Ed25519]
+  KM_sealed[SealedStore: ENV_SEALED_B64 + optional Shamir shards]
+  KM_audit[AuditTrail: append/verify/tail]
 end
 
 KM --> KM_hybrid
@@ -98,12 +94,12 @@ KM --> KM_sign
 KM --> KM_sealed
 KM --> KM_audit
 
-%% =============== CRYPTO OPS =============
+%% ============== CRYPTO OPS ================
 subgraph CRYPTO
-  ENC["encrypt_data<br/>compress → DEK (AES-GCM)<br/>hybrid wrap DEK using X25519+ML-KEM<br/>HKDF(SHA3-512) w/ color & HD ctx<br/>sign envelope (ML-DSA/Ed25519)"]
-  DEC["decrypt_data<br/>verify sig → derive wrap key → unwrap DEK → AES-GCM decrypt<br/>optional domain HD key"]
-  HK["HKDF SHA3-512"]
-  A2["Argon2id<br/>hash_secret_raw / PasswordHasher"]
+  ENC[encrypt_data: compress + AES-GCM DEK + hybrid wrap + sign]
+  DEC[decrypt_data: verify + unwrap DEK + AES-GCM decrypt]
+  HK[HKDF SHA3-512]
+  A2[Argon2id: PasswordHasher]
 end
 
 KM_hybrid --> ENC
@@ -113,102 +109,89 @@ KM_sign --> DEC
 KM_hybrid --> DEC
 HK --> DEC
 
-%% =============== QUANTUM / SIGNALS =====
+%% ============== QUANTUM / SIGNALS =========
 subgraph QUANTUM
-  Q_scan["quantum_hazard_scan<br/>PennyLane default.qubit (5 wires)"]
-  Q_feat["_quantum_features / _system_signals<br/>cpu/ram + RNG + parity/top3"]
-  ColorSync["ColorSync<br/>entropy/accent tone; OKLCH approx"]
+  Q_scan[quantum_hazard_scan (PennyLane)]
+  Q_sig[_system_signals (cpu, ram, rng, quantum features)]
+  ColorSync[ColorSync: accent color sampling]
 end
 
-Q_scan --> Q_feat
+Q_scan --> Q_sig
 ColorSync --> API_theme
-Q_feat --> API_route
-Q_feat --> API_stream
+Q_sig --> API_route
+Q_sig --> API_stream
 
-%% =============== LLM / OPENAI ==========
+%% ============== LLM / OPENAI ==============
 subgraph LLM
-  L_call["_call_llm (httpx)<br/>/v1/chat/completions (gpt-4o-mini)<br/>response_format=json_object"]
-  L_resp["run_openai_completion (async)<br/>/v1/responses (gpt-5)<br/>robust text extraction"]
-  PHF["phf_filter_input (async)<br/>probabilistic harm filter (fallback safe)"]
+  L_call[_call_llm: chat.completions JSON]
+  L_resp[run_openai_completion: responses API]
+  PHF[phf_filter_input: harm filtering]
 end
 
 API_route --> L_call --> OPENAI
 API_stream --> L_call
-R_register --> PHF
-PHF --> R_register
+R_register --> PHF --> R_register
 L_resp --> R_register
 
-%% =============== EXTERNAL ==============
+%% ============== EXTERNAL ==================
 subgraph EXTERNAL
-  OPENAI["OpenAI APIs<br/>/v1/chat/completions<br/>/v1/responses"]
-  OQS["liboqs (optional)<br/>ML-KEM / ML-DSA backends"]
+  OPENAI[OpenAI APIs]
+  OQS[liboqs (ML-KEM / ML-DSA)]
 end
 
 OQS --> KM_hybrid
 OQS --> KM_sign
 
-%% =============== DATABASE ==============
+%% ============== DATABASE ==================
 subgraph DB
-  DB_file["SQLite file<br/>/var/data/secure_data.db"]
-  DB_tables["Tables<br/>users, hazard_reports, config,<br/>rate_limits, invite_codes, entropy_logs"]
+  DB_file[SQLite file: /var/data/secure_data.db]
+  DB_tables[Tables: users, hazard_reports, config, rate_limits, invite_codes, entropy_logs]
 end
 
 DB_file --> DB_tables
 
-%% Writes with encryption
-R_register -->|create user| ENC --> DB_tables
-R_login -->|verify Argon2id| DB_tables
-API_route -->|save_hazard_report (fields encrypted)| ENC --> DB_tables
-R_view -->|decrypt report| DEC --> DB_tables
-R_settings -->|insert invite code| DB_tables
-BG_expire -->|overwrite & delete| DB_tables
+R_register -- "create user (encrypted fields)" --> DB_tables
+R_login -- "verify password (Argon2id)" --> DB_tables
+API_route -- "save hazard report (encrypted)" --> DB_tables
+R_view -- "read and decrypt report" --> DB_tables
+R_settings -- "insert invite code" --> DB_tables
+BG_expire -- "overwrite and delete expired rows, then VACUUM" --> DB_tables
 
-%% =============== FILES / AUDIT =========
+%% ============== FILES =====================
 subgraph FILES
-  F_audit["sealed_store/audit.log<br/>AES-GCM encrypted entries<br/>hash-chained"]
-  F_hd["sealed_store/hd_epoch.json<br/>epoch rotations for HD keys"]
+  F_audit[audit.log (encrypted, chain-hashed)]
+  F_hd[hd_epoch.json (HD epoch)]
 end
 
 KM_audit --> F_audit
 F_hd --> ENC
 F_hd --> DEC
 
-%% =============== ENV / CONFIG ==========
+%% ============== ENV / CONFIG ==============
 subgraph ENV
-  E_vars["ENV vars<br/>INVITE_CODE_SECRET_KEY, ENCRYPTION_PASSPHRASE,<br/>QRS_* salts/keys, REGISTRATION_ENABLED, STRICT_PQ2_ONLY"]
-  E_sealed["ENV_SEALED_B64<br/>sealed keys blob"]
+  E_vars[ENV vars: INVITE_CODE_SECRET_KEY, ENCRYPTION_PASSPHRASE, QRS_*, REGISTRATION_ENABLED, STRICT_PQ2_ONLY]
+  E_sealed[ENV_SEALED_B64 (sealed keys)]
 end
 
 E_vars --> KM
 E_sealed --> KM_sealed
 KM_sealed --> E_sealed
 
-%% =============== SESSION FLOW ==========
+%% ============== SESSION FLOW ==============
 BG_rotate --> SIF
 SIF --> COOK
 
-%% =============== CLIENT ↔ APP ==========
-CLIENT -->|HTTP/S| APP
-APP -->|HTML/CSS/JS + CSRF token| CLIENT
-CLIENT -->|Fetch /api/theme/personalize| API_theme
-CLIENT -->|POST /api/risk/llm_route| API_route
-CLIENT -->|SSE /api/risk/stream| API_stream
-CLIENT -->|Forms /login /register| R_login
-CLIENT -->|Forms /register| R_register
-CLIENT -->|GET /view_report/:id| R_view
-
-%% =============== MISC UTILS ============
-subgraph UTILS
-  Utils_sql["quote_ident / safe SQL checks"]
-  Utils_geo["reverse_geocode + geonamescache<br/>quantum_haversine_distance"]
-  Utils_rate["rate limits per user<br/>window + counters"]
-end
-
-Utils_geo --> R_view
-Utils_rate --> API_route
-Utils_rate --> API_stream
-
+%% ============== CLIENT <-> APP ============
+CLIENT -- "HTTP" --> APP
+APP -- "HTML + JS + CSRF token" --> CLIENT
+CLIENT -- "Fetch theme" --> API_theme
+CLIENT -- "POST risk" --> API_route
+CLIENT -- "SSE stream" --> API_stream
+CLIENT -- "Login form" --> R_login
+CLIENT -- "Register form" --> R_register
+CLIENT -- "View report" --> R_view
 ```
+
 If you’ve ever wished your Flask app could juggle security like a HSM, speak PQC, breathe like a synthwave dashboard, and still feel snappy, you’re in the right place. This walkthrough unpacks a dense but thoughtfully engineered codebase that:
 
 * boots cryptographic material from environment variables only (no key files on disk),
