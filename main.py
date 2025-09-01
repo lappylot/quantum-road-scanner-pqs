@@ -3529,7 +3529,7 @@ Please assess the following:
     report: str = raw_report if raw_report is not None else "OpenAI failed to respond."
     report = report.strip()
 
-    harm_level = calculate_harm_level(report)
+
 
     logger.debug("Exiting scan_debris_for_route with model_used=%s", model_used)
     return (
@@ -5742,19 +5742,6 @@ def dashboard():
                                   reports=reports,
                                   csrf_token=csrf_token,
                                   preferred_model=preferred_model)
-
-
-def calculate_harm_level(result):
-    if re.search(r'\b(high|severe|critical|urgent|dangerous)\b', result,
-                 re.IGNORECASE):
-        return "High"
-    elif re.search(r'\b(medium|moderate|caution|warning)\b', result,
-                   re.IGNORECASE):
-        return "Medium"
-    elif re.search(r'\b(low|minimal|safe|minor|normal)\b', result,
-                   re.IGNORECASE):
-        return "Low"
-    return "Neutral"
 
 
 @app.route('/start_scan', methods=['POST'])
