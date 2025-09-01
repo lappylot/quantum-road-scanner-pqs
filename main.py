@@ -3934,11 +3934,11 @@ def home():
     <!-- HERO -->
     <section class="hero p-4 p-md-5 mb-4">
       <div class="hero-content">
-        <h1 class="hero-title">A Colorwheel That Maps Road Risk</h1>
+        <h1 class="hero-title">A Colorwheel To Simulate Your Path to Safety</h1>
         <p class="lead-soft">
-          Meet your AI powered road scanner. Our open source tech blends key risk signals into a unique risk score. (Beta)
+          Meet our cutting edge Sim Tech, QRS. An AI powered road scanner. We forecast your route using key risk signals into a unique risk score.
           <br> </br>
-          Please drive responsibly. AI risk readings are currently a beta simulation technology and can be wrong.
+          Please drive responsibly. AI risk readings are currently beta simulation technology and can be inaccurate.
           <br></br>
         </p>
         <div class="d-flex flex-wrap align-items-center hero-cta">
@@ -3974,8 +3974,9 @@ def home():
           <div class="text-center">
             <h3 class="mb-2">How it works</h3>
             <p class="meta mx-auto" style="max-width:60ch">
-               From deer to nails in your path and possibly even potential accidents around the next bend. 
-              QRS generates 70-90% accurate probabilities using real world GPT4/GPT5 AI powered simulations in the blink of an eye.
+               From deer, to nails in your path, possibly even accidents around the next bend. 
+               <br> </br>
+              QRS generates a 70-90% accurate probability scan using GPT4/GPT5 AI powered world simulations.
             </p>
             <div class="d-flex flex-wrap align-items-center justify-content-center mt-3" style="gap:.7rem">
               <button id="btnRefresh" class="btn btn-sm btn-outline-light">Refresh</button>
