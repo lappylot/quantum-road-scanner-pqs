@@ -3934,12 +3934,12 @@ def home():
     <!-- HERO -->
     <section class="hero p-4 p-md-5 mb-4">
       <div class="hero-content">
-        <h1 class="hero-title">A Simple Colorwheel To Map Out Live Road Risk</h1>
+        <h1 class="hero-title">A Colorwheel That Maps Road Risk</h1>
         <p class="lead-soft">
-          Meet your AI powered road risk scanner. Our technology blends key risk signals into a single colorized score.
-          Our Colorwheel system displays a scale from calm green → caution amber → alert red, all depending upon real world risk.
-          Please drive responsibly. AI risk readings are a beta simulation and can be wrong especially if driving
-                                   patterns change due to lower risk readings.
+          Meet your AI powered road scanner. Our open source tech blends key risk signals into a unique risk score.
+          Then QRS's Colorwheel displays a scale from calm green → caution amber → alert red, all depending upon synchronized real world road  risk (beta).
+          Please drive responsibly. AI risk readings are beta simulation technology and can be wrong especially if driving
+                                   patterns change due to a low risk reading.
           <br></br>
         </p>
         <div class="d-flex flex-wrap align-items-center hero-cta">
@@ -3966,7 +3966,8 @@ def home():
         </div>
       </div>
 
-      <p class="meta mt-3 text-center">QRS Utilizes Advanced AI and Quantum Simulations To Map Real World Road Risk.</p>
+      <p class="meta mt-3 text-center" From deer, nails in your path, even potential accidents around the next bend. 
+                                       QRS generates your accurate potential world simulations in the blink of an eye. (beta) </p>
     </section>
 
     <!-- CONTROLS + EXPLAINER -->
