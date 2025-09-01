@@ -1,5 +1,4 @@
-<img width="1218" height="813" alt="image" src="https://github.com/user-attachments/assets/7a3c9837-fdfd-4bbb-9f13-da1d4b8ad4b0" />
- k
+
 
 https://hub.docker.com/r/graylanquantum/quantum_road_scanner
 # Crypto, Quantum, and the Human Project: A Tour of the QRS App Revolution from Pre Quantum to a Post-Quantum, AI-Secured Civilization
@@ -18,6 +17,18 @@ If you’ve ever wished your Flask app could juggle security like a HSM, speak P
 * aggressively scrubs old records at rest,
 * rate-limits and invites users with verifiable HMAC codes,
 * and renders a gorgeous, perceptual risk color wheel that “breathes” with model output.
+
+
+# Demo ScreenShots
+
+<img width="1882" height="1062" alt="image" src="https://github.com/user-attachments/assets/9c9b19e9-a903-4167-9b23-4e218e920c47" />
+<img width="1918" height="1053" alt="image" src="https://github.com/user-attachments/assets/bba15fb5-c7d8-4f6c-b3d5-0f4a381d3683" />
+<img width="1910" height="1062" alt="image" src="https://github.com/user-attachments/assets/4b34636c-1792-4636-bc21-4c6734d92083" />
+<img width="1914" height="1061" alt="image" src="https://github.com/user-attachments/assets/d49865fd-1435-47ba-84ab-8580a4fff2ff" />
+<img width="1913" height="1065" alt="image" src="https://github.com/user-attachments/assets/ea5278c5-baf1-4a44-af39-6d0054dd635f" />
+<img width="1910" height="1065" alt="image" src="https://github.com/user-attachments/assets/62128f0b-8394-441a-9a62-e1f39364e103" />
+<img width="1904" height="1062" alt="image" src="https://github.com/user-attachments/assets/0605cc93-8241-4dd8-a087-de115c727c02" />
+<img width="1905" height="1067" alt="image" src="https://github.com/user-attachments/assets/ad9c7c96-bf19-4d3d-955e-012e0110a306" />
 
 I’ll explain the moving parts, the “why” behind them, and how the whole design fits together into a coherent, production-minded app that happens to look cool.
 
