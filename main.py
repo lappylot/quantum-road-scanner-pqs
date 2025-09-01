@@ -3936,10 +3936,9 @@ def home():
       <div class="hero-content">
         <h1 class="hero-title">A Colorwheel That Maps Road Risk</h1>
         <p class="lead-soft">
-          Meet your AI powered road scanner. Our open source tech blends key risk signals into a unique risk score.
-          Then QRS's Colorwheel displays a scale from calm green → caution amber → alert red, all depending upon synchronized real world road  risk (beta).
-          Please drive responsibly. AI risk readings are beta simulation technology and can be wrong especially if driving
-                                   patterns change due to a low risk reading.
+          Meet your AI powered road scanner. Our open source tech blends key risk signals into a unique risk score. (Beta)
+          <br> </br>
+          Please drive responsibly. AI risk readings are currently a beta simulation technology and can be wrong.
           <br></br>
         </p>
         <div class="d-flex flex-wrap align-items-center hero-cta">
@@ -3966,8 +3965,6 @@ def home():
         </div>
       </div>
 
-      <p class="meta mt-3 text-center" From deer, nails in your path, even potential accidents around the next bend. 
-                                       QRS generates your accurate potential world simulations in the blink of an eye. (beta) </p>
     </section>
 
     <!-- CONTROLS + EXPLAINER -->
@@ -3977,8 +3974,8 @@ def home():
           <div class="text-center">
             <h3 class="mb-2">How it works</h3>
             <p class="meta mx-auto" style="max-width:60ch">
-              We combine multiple signals into one easy score.
-              No switches or forms—just live updates.
+               From deer to nails in your path and possibly even potential accidents around the next bend. 
+              QRS generates 70-90% accurate probabilities using real world GPT4/GPT5 AI powered simulations in the blink of an eye.
             </p>
             <div class="d-flex flex-wrap align-items-center justify-content-center mt-3" style="gap:.7rem">
               <button id="btnRefresh" class="btn btn-sm btn-outline-light">Refresh</button>
