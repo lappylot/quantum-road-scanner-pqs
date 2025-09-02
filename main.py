@@ -2006,11 +2006,33 @@ _ALLOWED_ATTRS = {
     'td': ['colspan','rowspan']
 }
 _ALLOWED_PROTOCOLS = ['http','https','mailto','data']
-_HTML_CLEANER = bleach.Cleaner(tags=_ALLOWED_TAGS, attributes=_ALLOWED_ATTRS, protocols=_ALLOWED_PROTOCOLS, strip=True, strip_comments=True)
+
+def _link_cb_rel_and_target(attrs, new):
+    if (None, 'href') not in attrs:
+        return attrs
+    rel_key = (None, 'rel')
+    rel_tokens = set((attrs.get(rel_key, '') or '').split())
+    rel_tokens.update({'nofollow', 'noopener', 'noreferrer'})
+    attrs[rel_key] = ' '.join(sorted(t for t in rel_tokens if t))
+    attrs[(None, 'target')] = '_blank'
+    return attrs
+
 def sanitize_html(html: str) -> str:
-    html = _HTML_CLEANER.clean(html or "")
-    html = bleach.linkify(html, callbacks=[bleach.linkifier.nofollow, bleach.linkifier.target_blank], skip_tags=['code','pre'])
+    html = html or ""
+    html = bleach.clean(
+        html,
+        tags=_ALLOWED_TAGS,
+        attributes=_ALLOWED_ATTRS,
+        protocols=_ALLOWED_PROTOCOLS,
+        strip=True,
+    )
+    html = bleach.linkify(
+        html,
+        callbacks=[_link_cb_rel_and_target],
+        skip_tags=['code','pre'],
+    )
     return html
+
 def sanitize_text(s: str, max_len: int) -> str:
     s = bleach.clean(s or "", tags=[], attributes={}, protocols=_ALLOWED_PROTOCOLS, strip=True, strip_comments=True)
     s = re.sub(r'\s+', ' ', s).strip()
