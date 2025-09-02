@@ -1864,6 +1864,8 @@ try:
 except NameError:
     quantum_hazard_scan = None  
 
+from flask_wtf.csrf import validate_csrf
+
 def create_tables():
     if not DB_FILE.exists():
         DB_FILE.touch(mode=0o600)
@@ -2648,12 +2650,10 @@ def blog_api_post_get(post_id: int):
 def blog_api_post_save():
     guard = _require_admin()
     if guard: return guard
-    sent = request.headers.get("X-CSRFToken") or request.headers.get("X-CSRF-Token")
+    token = request.headers.get("X-CSRFToken") or request.headers.get("X-CSRF-Token") or ""
     try:
-        expected = request.cookies.get('csrf_token') or ""
+        validate_csrf(token)
     except Exception:
-        expected = ""
-    if not sent or not expected or not hmac.compare_digest(sent, expected):
         return jsonify({"ok": False, "msg": "CSRF failed"}), 400
     try:
         body = request.get_json(force=True, silent=False) or {}
@@ -2663,15 +2663,12 @@ def blog_api_post_save():
     if raw_len > 400_000:
         return jsonify({"ok": False, "msg": "Payload too large"}), 413
     post_id = body.get("id")
-    title = str(body.get("title") or "")
-    slug = str(body.get("slug") or "")
+    title = sanitize_text(str(body.get("title") or ""), 160)
+    slug = sanitize_text(str(body.get("slug") or ""), 80).lower()
     summary = str(body.get("summary") or "")
     content = str(body.get("content") or "")
-    tags = str(body.get("tags") or "")
+    tags = sanitize_tags_csv(str(body.get("tags") or ""))
     status = str(body.get("status") or "draft")
-    title = sanitize_text(title, 160)
-    tags = sanitize_tags_csv(tags)
-    slug = sanitize_text(slug, 80).lower()
     uid = _get_userid_or_abort()
     if uid <= 0:
         return jsonify({"ok": False, "msg": "Not authenticated"}), 401
@@ -2693,16 +2690,18 @@ def blog_api_post_save():
 def blog_api_post_delete():
     guard = _require_admin()
     if guard: return guard
-    sent = request.headers.get("X-CSRFToken") or request.headers.get("X-CSRF-Token")
-    expected = request.cookies.get('csrf_token') or ""
-    if not sent or not expected or not hmac.compare_digest(sent, expected):
+    token = request.headers.get("X-CSRFToken") or request.headers.get("X-CSRF-Token") or ""
+    try:
+        validate_csrf(token)
+    except Exception:
         return jsonify({"ok": False, "msg": "CSRF failed"}), 400
     try:
         body = request.get_json(force=True, silent=False) or {}
     except Exception:
         return jsonify({"ok": False, "msg": "Bad JSON"}), 400
     pid = body.get("id")
-    if not pid: return jsonify({"ok": False, "msg": "Missing id"}), 400
+    if not pid:
+        return jsonify({"ok": False, "msg": "Missing id"}), 400
     if blog_delete(int(pid)):
         return jsonify({"ok": True})
     else:
@@ -2713,6 +2712,7 @@ def blog_admin_redirect():
     guard = _require_admin()
     if guard: return guard
     return redirect(url_for('blog_admin'))
+
 
 
 
