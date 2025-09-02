@@ -1867,10 +1867,8 @@ except NameError:
 def create_tables():
     if not DB_FILE.exists():
         DB_FILE.touch(mode=0o600)
-
     with sqlite3.connect(DB_FILE) as db:
         cursor = db.cursor()
-
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY,
@@ -1880,7 +1878,6 @@ def create_tables():
                 preferred_model TEXT DEFAULT 'openai'
             )
         """)
-
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS hazard_reports (
                 id INTEGER PRIMARY KEY,
@@ -1900,19 +1897,15 @@ def create_tables():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
         """)
-
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS config (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             )
         """)
-
         cursor.execute("SELECT value FROM config WHERE key = 'registration_enabled'")
         if not cursor.fetchone():
-            cursor.execute("INSERT INTO config (key, value) VALUES (?, ?)",
-                           ('registration_enabled', '1'))
-
+            cursor.execute("INSERT INTO config (key, value) VALUES (?, ?)", ('registration_enabled', '1'))
         cursor.execute("PRAGMA table_info(hazard_reports)")
         existing = {row[1] for row in cursor.fetchall()}
         alter_map = {
@@ -1931,7 +1924,6 @@ def create_tables():
         for col, alter_sql in alter_map.items():
             if col not in existing:
                 cursor.execute(alter_sql)
-
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS rate_limits (
                 user_id INTEGER,
@@ -1940,7 +1932,6 @@ def create_tables():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
         """)
-
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS invite_codes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1948,7 +1939,6 @@ def create_tables():
                 is_used BOOLEAN DEFAULT 0
             )
         """)
-
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS entropy_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1957,10 +1947,773 @@ def create_tables():
                 timestamp TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
-
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS blog_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT UNIQUE NOT NULL,
+                title_enc TEXT NOT NULL,
+                content_enc TEXT NOT NULL,
+                summary_enc TEXT,
+                tags_enc TEXT,
+                status TEXT NOT NULL DEFAULT 'draft',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                author_id INTEGER NOT NULL,
+                sig_alg TEXT,
+                sig_pub_fp8 TEXT,
+                sig_val BLOB,
+                FOREIGN KEY (author_id) REFERENCES users(id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_blog_status_created ON blog_posts (status, created_at DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_blog_updated ON blog_posts (updated_at DESC)")
         db.commit()
-
     print("Database tables created and verified successfully.")
+
+class BlogForm(FlaskForm):
+    title = StringField('Title', validators=[DataRequired(), Length(min=1, max=160)])
+    slug = StringField('Slug', validators=[Length(min=3, max=80)])
+    summary = TextAreaField('Summary', validators=[Length(max=5000)])
+    content = TextAreaField('Content', validators=[DataRequired(), Length(min=1, max=200000)])
+    tags = StringField('Tags', validators=[Length(max=500)])
+    status = SelectField('Status', choices=[('draft', 'Draft'), ('published', 'Published'), ('archived', 'Archived')], validators=[DataRequired()])
+    submit = SubmitField('Save')
+
+_SLUG_RE = re.compile(r'^[a-z0-9]+(?:-[a-z0-9]+)*$')
+def _slugify(title: str) -> str:
+    base = re.sub(r'[^a-zA-Z0-9\s-]', '', (title or '')).strip().lower()
+    base = re.sub(r'\s+', '-', base)
+    base = re.sub(r'-{2,}', '-', base).strip('-')
+    if not base:
+        base = secrets.token_hex(4)
+    return base[:80]
+def _valid_slug(slug: str) -> bool:
+    return bool(_SLUG_RE.fullmatch(slug or ''))
+_ALLOWED_TAGS = set(bleach.sanitizer.ALLOWED_TAGS) | {
+    'p','h1','h2','h3','h4','h5','h6','ul','ol','li','strong','em','blockquote','code','pre',
+    'a','img','hr','br','table','thead','tbody','tr','th','td','span'
+}
+_ALLOWED_ATTRS = {
+    **bleach.sanitizer.ALLOWED_ATTRIBUTES,
+    'a': ['href','title','rel','target'],
+    'img': ['src','alt','title','width','height','loading','decoding'],
+    'span': ['class','data-emoji'],
+    'code': ['class'],
+    'pre': ['class'],
+    'th': ['colspan','rowspan'],
+    'td': ['colspan','rowspan']
+}
+_ALLOWED_PROTOCOLS = ['http','https','mailto','data']
+_HTML_CLEANER = bleach.Cleaner(tags=_ALLOWED_TAGS, attributes=_ALLOWED_ATTRS, protocols=_ALLOWED_PROTOCOLS, strip=True, strip_comments=True)
+def sanitize_html(html: str) -> str:
+    html = _HTML_CLEANER.clean(html or "")
+    html = bleach.linkify(html, callbacks=[bleach.linkifier.nofollow, bleach.linkifier.target_blank], skip_tags=['code','pre'])
+    return html
+def sanitize_text(s: str, max_len: int) -> str:
+    s = bleach.clean(s or "", tags=[], attributes={}, protocols=_ALLOWED_PROTOCOLS, strip=True, strip_comments=True)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s[:max_len]
+def sanitize_tags_csv(raw: str, max_tags: int = 50) -> str:
+    parts = [sanitize_text(p, 40) for p in (raw or "").split(",")]
+    parts = [p for p in parts if p]
+    out = ",".join(parts[:max_tags])
+    return out[:500]
+def _blog_ctx(field: str, rid: Optional[int] = None) -> dict:
+    return build_hd_ctx(domain="blog", field=field, rid=rid)
+def blog_encrypt(field: str, plaintext: str, rid: Optional[int] = None) -> str:
+    return encrypt_data(plaintext or "", ctx=_blog_ctx(field, rid))
+def blog_decrypt(ciphertext: Optional[str]) -> str:
+    if not ciphertext: return ""
+    return decrypt_data(ciphertext) or ""
+def _post_sig_payload(slug: str, title_html: str, content_html: str, summary_html: str, tags_csv: str, status: str, created_at: str, updated_at: str) -> bytes:
+    return _canon_json({
+        "v":"blog1",
+        "slug": slug,
+        "title_html": title_html,
+        "content_html": content_html,
+        "summary_html": summary_html,
+        "tags_csv": tags_csv,
+        "status": status,
+        "created_at": created_at,
+        "updated_at": updated_at
+    })
+def _sign_post(payload: bytes) -> tuple[str, str, bytes]:
+    alg = key_manager.sig_alg_name or "Ed25519"
+    sig = key_manager.sign_blob(payload)
+    pub = getattr(key_manager, "sig_pub", None) or b""
+    return alg, _fp8(pub), sig
+def _verify_post(payload: bytes, sig_alg: str, sig_pub_fp8: str, sig_val: bytes) -> bool:
+    pub = getattr(key_manager, "sig_pub", None) or b""
+    if not pub: return False
+    if _fp8(pub) != sig_pub_fp8: return False
+    return key_manager.verify_blob(pub, sig_val, payload)
+def _require_admin() -> Optional[Response]:
+    if not session.get('is_admin'):
+        flash("Admin only.", "danger")
+        return redirect(url_for('dashboard'))
+    return None
+def _get_userid_or_abort() -> int:
+    if 'username' not in session:
+        return -1
+    uid = get_user_id(session['username'])
+    return int(uid or -1)
+
+def blog_get_by_slug(slug: str, allow_any_status: bool=False) -> Optional[dict]:
+    if not _valid_slug(slug): return None
+    with sqlite3.connect(DB_FILE) as db:
+        cur = db.cursor()
+        if allow_any_status:
+            cur.execute("SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val FROM blog_posts WHERE slug=? LIMIT 1", (slug,))
+        else:
+            cur.execute("SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val FROM blog_posts WHERE slug=? AND status='published' LIMIT 1", (slug,))
+        row = cur.fetchone()
+    if not row: return None
+    post = {
+        "id": row[0], "slug": row[1],
+        "title": blog_decrypt(row[2]),
+        "content": blog_decrypt(row[3]),
+        "summary": blog_decrypt(row[4]),
+        "tags": blog_decrypt(row[5]),
+        "status": row[6],
+        "created_at": row[7],
+        "updated_at": row[8],
+        "author_id": row[9],
+        "sig_alg": row[10] or "",
+        "sig_pub_fp8": row[11] or "",
+        "sig_val": row[12] if isinstance(row[12], (bytes,bytearray)) else (row[12].encode() if row[12] else b""),
+    }
+    return post
+def blog_list_published(limit: int = 25, offset: int = 0) -> list[dict]:
+    with sqlite3.connect(DB_FILE) as db:
+        cur = db.cursor()
+        cur.execute("""
+            SELECT id,slug,title_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id
+            FROM blog_posts
+            WHERE status='published'
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, (int(limit), int(offset)))
+        rows = cur.fetchall()
+    out = []
+    for r in rows:
+        out.append({
+            "id": r[0], "slug": r[1],
+            "title": blog_decrypt(r[2]),
+            "summary": blog_decrypt(r[3]),
+            "tags": blog_decrypt(r[4]),
+            "status": r[5],
+            "created_at": r[6], "updated_at": r[7],
+            "author_id": r[8],
+        })
+    return out
+def blog_list_all_admin(limit: int = 200, offset: int = 0) -> list[dict]:
+    with sqlite3.connect(DB_FILE) as db:
+        cur = db.cursor()
+        cur.execute("""
+            SELECT id,slug,title_enc,status,created_at,updated_at
+            FROM blog_posts
+            ORDER BY updated_at DESC
+            LIMIT ? OFFSET ?
+        """, (int(limit), int(offset)))
+        rows = cur.fetchall()
+    out=[]
+    for r in rows:
+        out.append({
+            "id": r[0], "slug": r[1],
+            "title": blog_decrypt(r[2]),
+            "status": r[3],
+            "created_at": r[4],
+            "updated_at": r[5],
+        })
+    return out
+def blog_slug_exists(slug: str, exclude_id: Optional[int]=None) -> bool:
+    with sqlite3.connect(DB_FILE) as db:
+        cur = db.cursor()
+        if exclude_id:
+            cur.execute("SELECT 1 FROM blog_posts WHERE slug=? AND id != ? LIMIT 1", (slug, int(exclude_id)))
+        else:
+            cur.execute("SELECT 1 FROM blog_posts WHERE slug=? LIMIT 1", (slug,))
+        return cur.fetchone() is not None
+def blog_save(post_id: Optional[int], author_id: int, title_html: str, content_html: str, summary_html: str, tags_csv: str, status: str, slug_in: Optional[str]) -> tuple[bool, str, Optional[int], Optional[str]]:
+    status = (status or "draft").lower()
+    if status not in ("draft","published","archived"):
+        return False, "Invalid status", None, None
+    title_html = sanitize_text(title_html, 160)
+    content_len_limit = 200_000
+    content_html = sanitize_html((content_html or "")[:content_len_limit])
+    summary_html = sanitize_html((summary_html or "")[:20_000])
+    tags_csv = sanitize_tags_csv(tags_csv)
+    if not title_html.strip():
+        return False, "Title is required", None, None
+    if not content_html.strip():
+        return False, "Content is required", None, None
+    slug = (slug_in or "").strip().lower()
+    if slug and not _valid_slug(slug):
+        return False, "Slug must be lowercase letters/numbers and hyphens", None, None
+    if not slug:
+        slug = _slugify(re.sub(r"<[^>]+>","",title_html))
+    if not _valid_slug(slug):
+        return False, "Unable to derive a valid slug", None, None
+    if blog_slug_exists(slug, exclude_id=post_id or None):
+        slug = f"{slug}-{secrets.token_hex(2)}"
+        if not _valid_slug(slug):
+            return False, "Slug conflict; please edit slug", None, None
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    created_at = now
+    existing = None
+    if post_id:
+        with sqlite3.connect(DB_FILE) as db:
+            cur = db.cursor()
+            cur.execute("SELECT created_at FROM blog_posts WHERE id=? LIMIT 1", (int(post_id),))
+            row = cur.fetchone()
+            if row:
+                created_at = row[0]
+                existing = True
+            else:
+                existing = False
+    payload = _post_sig_payload(slug, title_html, content_html, summary_html, tags_csv, status, created_at, now)
+    sig_alg, sig_fp8, sig_val = _sign_post(payload)
+    title_enc = blog_encrypt("title", title_html, post_id)
+    content_enc = blog_encrypt("content", content_html, post_id)
+    summary_enc = blog_encrypt("summary", summary_html, post_id)
+    tags_enc = blog_encrypt("tags", tags_csv, post_id)
+    try:
+        with sqlite3.connect(DB_FILE) as db:
+            cur = db.cursor()
+            if existing:
+                cur.execute("""
+                    UPDATE blog_posts
+                    SET slug=?, title_enc=?, content_enc=?, summary_enc=?, tags_enc=?, status=?, updated_at=?, sig_alg=?, sig_pub_fp8=?, sig_val=?
+                    WHERE id=?""",
+                    (slug, title_enc, content_enc, summary_enc, tags_enc, status, now, sig_alg, sig_fp8, sig_val, int(post_id))
+                )
+                db.commit()
+                audit.append("blog_update", {"id": int(post_id), "slug": slug, "status": status}, actor=session.get("username") or "admin")
+                return True, "Updated", int(post_id), slug
+            else:
+                cur.execute("""
+                    INSERT INTO blog_posts (slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at,author_id,sig_alg,sig_pub_fp8,sig_val)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (slug, title_enc, content_enc, summary_enc, tags_enc, status, created_at, now, int(author_id), sig_alg, sig_fp8, sig_val)
+                )
+                new_id = cur.lastrowid
+                db.commit()
+                audit.append("blog_create", {"id": int(new_id), "slug": slug, "status": status}, actor=session.get("username") or "admin")
+                return True, "Created", int(new_id), slug
+    except Exception as e:
+        logger.error(f"blog_save failed: {e}", exc_info=True)
+        return False, "DB error", None, None
+def blog_delete(post_id: int) -> bool:
+    try:
+        with sqlite3.connect(DB_FILE) as db:
+            cur = db.cursor()
+            cur.execute("DELETE FROM blog_posts WHERE id=?", (int(post_id),))
+            db.commit()
+            audit.append("blog_delete", {"id": int(post_id)}, actor=session.get("username") or "admin")
+        return True
+    except Exception as e:
+        logger.error(f"blog_delete failed: {e}", exc_info=True)
+        return False
+
+@app.get("/blog")
+def blog_index():
+    posts = blog_list_published(limit=50, offset=0)
+    seed = colorsync.sample()
+    accent = seed.get("hex", "#49c2ff")
+    return render_template_string("""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>QRS — Blog</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+  <style>
+    :root{ --accent: {{ accent }}; }
+    body{ background:#0b0f17; color:#eaf5ff; font-family:'Roboto',sans-serif; }
+    .navbar{ background: #00000088; backdrop-filter:saturate(140%) blur(10px); border-bottom:1px solid #ffffff22; }
+    .brand{ font-family:'Orbitron',sans-serif; }
+    .card-g{ background: #ffffff10; border:1px solid #ffffff22; border-radius:16px; box-shadow: 0 24px 70px rgba(0,0,0,.55); }
+    .post{ padding:18px; border-bottom:1px dashed #ffffff22; }
+    .post:last-child{ border-bottom:0; }
+    .post h3 a{ color:#eaf5ff; text-decoration:none; }
+    .post h3 a:hover{ color: var(--accent); }
+    .tag{ display:inline-block; padding:.2rem .5rem; border-radius:999px; background:#ffffff18; margin-right:.35rem; font-size:.8rem; }
+    .meta{ color:#b8cfe4; font-size:.9rem; }
+  </style>
+</head>
+<body>
+<nav class="navbar navbar-dark px-3">
+  <a class="navbar-brand brand" href="{{ url_for('home') }}">QRS</a>
+  <div class="d-flex gap-2">
+    <a class="nav-link" href="{{ url_for('blog_index') }}">Blog</a>
+    {% if session.get('is_admin') %}
+      <a class="nav-link" href="{{ url_for('blog_admin') }}">Manage</a>
+    {% endif %}
+  </div>
+</nav>
+<main class="container py-4">
+  <div class="card-g p-3 p-md-4">
+    <h1 class="mb-3" style="font-family:'Orbitron',sans-serif;">Blog</h1>
+    {% if posts %}
+      {% for p in posts %}
+        <div class="post">
+          <h3 class="mb-1"><a href="{{ url_for('blog_view', slug=p['slug']) }}">{{ p['title'] or '(untitled)' }}</a></h3>
+          <div class="meta mb-2">{{ p['created_at'] }}</div>
+          {% if p['summary'] %}<div class="mb-2">{{ p['summary']|safe }}</div>{% endif %}
+          {% if p['tags'] %}
+            <div class="mb-1">
+              {% for t in p['tags'].split(',') if t %}
+                <span class="tag">{{ t }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    {% else %}
+      <p>No published posts yet.</p>
+    {% endif %}
+  </div>
+</main>
+</body>
+</html>
+    """, posts=posts, accent=accent)
+
+@app.get("/blog/<slug>")
+def blog_view(slug: str):
+    allow_any = bool(session.get('is_admin'))
+    post = blog_get_by_slug(slug, allow_any_status=allow_any)
+    if not post:
+        return "Not found", 404
+    payload = _post_sig_payload(post["slug"], post["title"], post["content"], post["summary"], post["tags"], post["status"], post["created_at"], post["updated_at"])
+    sig_ok = _verify_post(payload, post["sig_alg"], post["sig_pub_fp8"], post["sig_val"] or b"")
+    seed = colorsync.sample()
+    accent = seed.get("hex", "#49c2ff")
+    return render_template_string("""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ post['title'] }} — QRS Blog</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+  <style>
+    :root{ --accent: {{ accent }}; }
+    body{ background:#0b0f17; color:#eaf5ff; font-family:'Roboto',sans-serif; }
+    .navbar{ background:#00000088; border-bottom:1px solid #ffffff22; backdrop-filter:saturate(140%) blur(10px); }
+    .brand{ font-family:'Orbitron',sans-serif; }
+    .card-g{ background:#ffffff10; border:1px solid #ffffff22; border-radius:16px; box-shadow: 0 24px 70px rgba(0,0,0,.55); }
+    .title{ font-family:'Orbitron',sans-serif; letter-spacing:.3px; }
+    .meta{ color:#b8cfe4; }
+    .sig-ok{ color:#8bd346; font-weight:700; }
+    .sig-bad{ color:#ff3b1f; font-weight:700; }
+    .content img{ max-width:100%; height:auto; border-radius:8px; }
+    .content pre{ background:#0d1423; border:1px solid #ffffff22; border-radius:8px; padding:12px; overflow:auto; }
+    .content code{ color:#9fb6ff; }
+    .tag{ display:inline-block; padding:.2rem .5rem; border-radius:999px; background:#ffffff18; margin-right:.35rem; font-size:.8rem; }
+  </style>
+</head>
+<body>
+<nav class="navbar navbar-dark px-3">
+  <a class="navbar-brand brand" href="{{ url_for('home') }}">QRS</a>
+  <div class="d-flex gap-2">
+    <a class="nav-link" href="{{ url_for('blog_index') }}">Blog</a>
+    {% if session.get('is_admin') %}
+      <a class="nav-link" href="{{ url_for('blog_admin') }}">Manage</a>
+    {% endif %}
+  </div>
+</nav>
+<main class="container py-4">
+  <div class="card-g p-3 p-md-4">
+    <h1 class="title mb-2">{{ post['title'] }}</h1>
+    <div class="meta mb-3">
+      {{ post['created_at'] }}
+      {% if post['tags'] %}
+        •
+        {% for t in post['tags'].split(',') if t %}
+          <span class="tag">{{ t }}</span>
+        {% endfor %}
+      {% endif %}
+      • Integrity: <span class="{{ 'sig-ok' if sig_ok else 'sig-bad' }}">{{ 'Verified' if sig_ok else 'Unverified' }}</span>
+      {% if session.get('is_admin') and post['status']!='published' %}
+        <span class="badge badge-warning">PREVIEW ({{ post['status'] }})</span>
+      {% endif %}
+    </div>
+    {% if post['summary'] %}<div class="mb-3">{{ post['summary']|safe }}</div>{% endif %}
+    <div class="content">{{ post['content']|safe }}</div>
+  </div>
+</main>
+</body>
+</html>
+    """, post=post, sig_ok=sig_ok, accent=accent)
+
+@app.get("/settings/blog")
+def blog_admin():
+    guard = _require_admin()
+    if guard: return guard
+    csrf_token = generate_csrf()
+    posts = blog_list_all_admin(limit=300, offset=0)
+    seed = colorsync.sample()
+    accent = seed.get("hex", "#49c2ff")
+    return render_template_string("""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>QRS — Blog Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet" integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00" crossorigin="anonymous">
+  <style>
+    :root{ --accent: {{ accent }}; }
+    body{ background:#0b0f17; color:#eaf5ff; font-family:'Roboto',sans-serif; }
+    .brand{ font-family:'Orbitron',sans-serif; }
+    .navbar{ background:#00000088; border-bottom:1px solid #ffffff22; backdrop-filter:saturate(140%) blur(10px); }
+    .sidebar{ position:fixed; top:0; left:0; height:100%; width:260px; background:#0d1423; border-right:1px solid #ffffff22; padding-top:60px; overflow:auto; }
+    .content{ margin-left:260px; padding:18px; }
+    .card-g{ background:#ffffff10; border:1px solid #ffffff22; border-radius:16px; box-shadow:0 24px 70px rgba(0,0,0,.55); }
+    .pill{ background:#ffffff18; border:1px solid #ffffff22; border-radius:999px; padding:.2rem .6rem; font-size:.8rem; }
+    .list-item{ padding:.6rem .5rem; border-bottom:1px dashed #ffffff22; cursor:pointer; }
+    .list-item:hover{ background:#ffffff10; }
+    .list-item.active{ background: color-mix(in oklab, var(--accent) 16%, transparent); }
+    .btn-acc{ background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 70%, #7ae6ff), color-mix(in oklab, var(--accent) 50%, #2bd1ff)); border:0; color:#07121f; font-weight:900; }
+    .editor{ min-height: 300px; max-height: calc(80vh - 200px); overflow:auto; border-radius:12px; border:1px solid #ffffff22; background:#0d1423; padding:12px; }
+    .editor[contenteditable="true"]:focus{ outline: 2px solid color-mix(in oklab, var(--accent) 50%, #fff); }
+    .muted{ color:#95b2cf; }
+    .form-control, .form-select{ background:#0d1423; border:1px solid #ffffff22; color:#eaf5ff; }
+    .form-control:focus, .form-select:focus{ box-shadow:none; outline:2px solid color-mix(in oklab, var(--accent) 50%, #fff); }
+  </style>
+</head>
+<body>
+<nav class="navbar navbar-dark px-3 fixed-top">
+  <a class="navbar-brand brand" href="{{ url_for('home') }}">QRS</a>
+  <div class="d-flex gap-3">
+    <a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a>
+    <a class="nav-link" href="{{ url_for('settings') }}">Settings</a>
+    <span class="pill">Blog Admin</span>
+  </div>
+</nav>
+<div class="sidebar">
+  <div class="p-3">
+    <div class="d-flex align-items-center justify-content-between mb-2">
+      <h5 class="m-0">Posts</h5>
+      <button class="btn btn-sm btn-acc" id="btnNew">New</button>
+    </div>
+    <div id="postList" class="card-g">
+      {% for p in posts %}
+        <div class="list-item" data-id="{{ p['id'] }}">
+          <div class="d-flex justify-content-between">
+            <strong>{{ p['title'] or '(untitled)' }}</strong>
+            <span class="pill">{{ p['status'] }}</span>
+          </div>
+          <div class="muted">{{ p['updated_at'] }} • {{ p['slug'] }}</div>
+        </div>
+      {% endfor %}
+      {% if not posts %}
+        <div class="p-3 muted">No posts yet.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+<div class="content">
+  <div class="card-g p-3 p-md-4">
+    <form id="blogForm" class="row g-3" onsubmit="return false;">
+      <input type="hidden" id="postId" value="">
+      <div class="col-12 col-lg-8">
+        <label class="form-label">Title</label>
+        <input class="form-control" id="title" placeholder="Post title">
+      </div>
+      <div class="col-8 col-lg-3">
+        <label class="form-label">Slug</label>
+        <input class="form-control" id="slug" placeholder="auto-derived (lowercase-hyphens)">
+      </div>
+      <div class="col-4 col-lg-1">
+        <label class="form-label">Status</label>
+        <select id="status" class="form-select">
+          <option value="draft">Draft</option>
+          <option value="published">Published</option>
+          <option value="archived">Archived</option>
+        </select>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Summary (optional)</label>
+        <div id="summary" class="editor" contenteditable="true" aria-label="Summary"></div>
+        <small class="muted">This appears on list pages. Basic formatting allowed.</small>
+      </div>
+      <div class="col-12">
+        <label class="form-label">Content</label>
+        <div id="content" class="editor" contenteditable="true" aria-label="Content"></div>
+        <small class="muted">HTML allowed (sanitized). Paste from Markdown editors is OK.</small>
+      </div>
+      <div class="col-12 col-md-8">
+        <label class="form-label">Tags (comma-separated)</label>
+        <input class="form-control" id="tags" placeholder="safety, quantum, road">
+      </div>
+      <div class="col-12 col-md-4 d-flex align-items-end gap-2">
+        <button class="btn btn-acc w-100" id="btnSave">Save</button>
+        <button class="btn btn-danger w-100" id="btnDelete" disabled>Delete</button>
+        <a class="btn btn-outline-light w-100" id="btnView" target="_blank" rel="noopener">View</a>
+      </div>
+      <div id="msg" class="col-12 muted"></div>
+    </form>
+  </div>
+</div>
+<script src="{{ url_for('static', filename='js/jquery.min.js') }}" integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+<script src="{{ url_for('static', filename='js/bootstrap.min.js') }}" integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+<script>
+const CSRF = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+const el = s => document.querySelector(s);
+const $list = document.querySelectorAll.bind(document);
+function setMsg(s, ok){
+  const m = el('#msg');
+  m.textContent = s || '';
+  m.style.color = ok ? '#8bd346' : '#b8cfe4';
+}
+function pick(id){
+  $list('#postList .list-item').forEach(n=>n.classList.remove('active'));
+  const node = document.querySelector('.list-item[data-id="'+id+'"]');
+  if(node) node.classList.add('active');
+}
+async function loadPost(id){
+  pick(id);
+  setMsg('Loading…');
+  try{
+    const r = await fetch(`/admin/blog/api/post/${id}`, {credentials:'same-origin'});
+    if(!r.ok){ setMsg('Error loading post'); return; }
+    const j = await r.json();
+    el('#postId').value = j.id || '';
+    el('#title').value = j.title || '';
+    el('#slug').value = j.slug || '';
+    el('#status').value = j.status || 'draft';
+    el('#summary').innerHTML = j.summary || '';
+    el('#content').innerHTML = j.content || '';
+    el('#tags').value = j.tags || '';
+    el('#btnDelete').disabled = !j.id;
+    el('#btnView').href = j.slug ? `/blog/${j.slug}` : '#';
+    setMsg('Loaded', true);
+  }catch(e){
+    setMsg('Load failed');
+  }
+}
+async function savePost(){
+  setMsg('Saving…');
+  const payload = {
+    id: el('#postId').value ? Number(el('#postId').value) : null,
+    title: el('#title').value || '',
+    slug: el('#slug').value || '',
+    status: el('#status').value || 'draft',
+    summary: el('#summary').innerHTML || '',
+    content: el('#content').innerHTML || '',
+    tags: el('#tags').value || ''
+  };
+  try{
+    const r = await fetch('/admin/blog/api/save', {
+      method:'POST', credentials:'same-origin',
+      headers: {'Content-Type':'application/json','X-CSRFToken':CSRF},
+      body: JSON.stringify(payload)
+    });
+    const j = await r.json();
+    if(r.ok && j.ok){
+      el('#postId').value = j.id;
+      el('#slug').value = j.slug;
+      el('#btnDelete').disabled = false;
+      el('#btnView').href = `/blog/${j.slug}`;
+      await refreshList(j.id);
+      setMsg(j.msg || 'Saved', true);
+    }else{
+      setMsg(j.msg || 'Save failed');
+    }
+  }catch(e){ setMsg('Save failed'); }
+}
+const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+async function refreshList(selectId){
+  try{
+    const r = await fetch('/admin/blog/api/posts', {credentials:'same-origin'});
+    const j = await r.json();
+    const box = el('#postList');
+    box.innerHTML = '';
+    if(Array.isArray(j.posts) && j.posts.length){
+      j.posts.forEach(p=>{
+        const d = document.createElement('div');
+        d.className = 'list-item';
+        d.dataset.id = p.id;
+        d.innerHTML = `
+          <div class="d-flex justify-content-between">
+            <strong>${esc(p.title||'(untitled)')}</strong>
+            <span class="pill">${esc(p.status)}</span>
+          </div>
+          <div class="muted">${esc(p.updated_at)} • ${esc(p.slug)}</div>`;
+        d.onclick = ()=> loadPost(p.id);
+        box.appendChild(d);
+      });
+    }else{
+      const d = document.createElement('div');
+      d.className='p-3 muted'; d.textContent='No posts yet.'; box.appendChild(d);
+    }
+    if(selectId) pick(selectId);
+  }catch(e){}
+}
+async function deletePost(){
+  const id = el('#postId').value;
+  if(!id) return;
+  if(!confirm('Delete this post permanently?')) return;
+  setMsg('Deleting…');
+  try{
+    const r = await fetch('/admin/blog/api/delete', {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json','X-CSRFToken':CSRF},
+      body: JSON.stringify({id: Number(id)})
+    });
+    const j = await r.json();
+    if(r.ok && j.ok){
+      await refreshList();
+      el('#postForm')?.reset?.();
+      el('#postId').value='';
+      el('#title').value='';
+      el('#slug').value='';
+      el('#status').value='draft';
+      el('#summary').innerHTML='';
+      el('#content').innerHTML='';
+      el('#tags').value='';
+      el('#btnDelete').disabled = true;
+      el('#btnView').href = '#';
+      setMsg('Deleted', true);
+    }else{
+      setMsg(j.msg || 'Delete failed');
+    }
+  }catch(e){ setMsg('Delete failed'); }
+}
+el('#btnNew').onclick = ()=>{
+  $list('#postList .list-item').forEach(n=>n.classList.remove('active'));
+  el('#postId').value='';
+  el('#title').value='';
+  el('#slug').value='';
+  el('#status').value='draft';
+  el('#summary').innerHTML='';
+  el('#content').innerHTML='';
+  el('#tags').value='';
+  el('#btnDelete').disabled = true;
+  el('#btnView').href='#';
+  setMsg('New post');
+};
+el('#btnSave').onclick = savePost;
+el('#btnDelete').onclick = deletePost;
+$list('#postList .list-item').forEach(n=>{
+  n.onclick = ()=> loadPost(n.dataset.id);
+});
+</script>
+</body>
+</html>
+    """, posts=posts, csrf_token=csrf_token, accent=accent)
+
+@app.get("/admin/blog/api/posts")
+def blog_api_posts():
+    guard = _require_admin()
+    if guard: return guard
+    posts = blog_list_all_admin(limit=500, offset=0)
+    return jsonify({"ok": True, "posts": posts})
+
+@app.get("/admin/blog/api/post/<int:post_id>")
+def blog_api_post_get(post_id: int):
+    guard = _require_admin()
+    if guard: return guard
+    with sqlite3.connect(DB_FILE) as db:
+        cur = db.cursor()
+        cur.execute("""
+            SELECT id,slug,title_enc,content_enc,summary_enc,tags_enc,status,created_at,updated_at
+            FROM blog_posts WHERE id=? LIMIT 1
+        """, (int(post_id),))
+        row = cur.fetchone()
+    if not row:
+        return jsonify({"ok": False, "msg": "Not found"}), 404
+    j = {
+        "id": row[0], "slug": row[1],
+        "title": blog_decrypt(row[2]),
+        "content": blog_decrypt(row[3]),
+        "summary": blog_decrypt(row[4]),
+        "tags": blog_decrypt(row[5]),
+        "status": row[6],
+        "created_at": row[7], "updated_at": row[8],
+    }
+    return jsonify(j)
+
+@app.post("/admin/blog/api/save")
+@csrf.exempt
+def blog_api_post_save():
+    guard = _require_admin()
+    if guard: return guard
+    sent = request.headers.get("X-CSRFToken") or request.headers.get("X-CSRF-Token")
+    try:
+        expected = request.cookies.get('csrf_token') or ""
+    except Exception:
+        expected = ""
+    if not sent or not expected or not hmac.compare_digest(sent, expected):
+        return jsonify({"ok": False, "msg": "CSRF failed"}), 400
+    try:
+        body = request.get_json(force=True, silent=False) or {}
+    except Exception:
+        return jsonify({"ok": False, "msg": "Bad JSON"}), 400
+    raw_len = len(json.dumps(body, separators=(",",":")))
+    if raw_len > 400_000:
+        return jsonify({"ok": False, "msg": "Payload too large"}), 413
+    post_id = body.get("id")
+    title = str(body.get("title") or "")
+    slug = str(body.get("slug") or "")
+    summary = str(body.get("summary") or "")
+    content = str(body.get("content") or "")
+    tags = str(body.get("tags") or "")
+    status = str(body.get("status") or "draft")
+    title = sanitize_text(title, 160)
+    tags = sanitize_tags_csv(tags)
+    slug = sanitize_text(slug, 80).lower()
+    uid = _get_userid_or_abort()
+    if uid <= 0:
+        return jsonify({"ok": False, "msg": "Not authenticated"}), 401
+    ok, msg, saved_id, final_slug = blog_save(
+        post_id = int(post_id) if post_id else None,
+        author_id = uid,
+        title_html = title,
+        content_html = content,
+        summary_html = summary,
+        tags_csv = tags,
+        status = status,
+        slug_in = slug or None
+    )
+    code = 200 if ok else 400
+    return jsonify({"ok": ok, "msg": msg, "id": saved_id, "slug": final_slug}), code
+
+@app.post("/admin/blog/api/delete")
+@csrf.exempt
+def blog_api_post_delete():
+    guard = _require_admin()
+    if guard: return guard
+    sent = request.headers.get("X-CSRFToken") or request.headers.get("X-CSRF-Token")
+    expected = request.cookies.get('csrf_token') or ""
+    if not sent or not expected or not hmac.compare_digest(sent, expected):
+        return jsonify({"ok": False, "msg": "CSRF failed"}), 400
+    try:
+        body = request.get_json(force=True, silent=False) or {}
+    except Exception:
+        return jsonify({"ok": False, "msg": "Bad JSON"}), 400
+    pid = body.get("id")
+    if not pid: return jsonify({"ok": False, "msg": "Missing id"}), 400
+    if blog_delete(int(pid)):
+        return jsonify({"ok": True})
+    else:
+        return jsonify({"ok": False, "msg": "Delete failed"}), 500
+
+@app.get("/admin/blog")
+def blog_admin_redirect():
+    guard = _require_admin()
+    if guard: return guard
+    return redirect(url_for('blog_admin'))
+
 
 
 def overwrite_hazard_reports_by_timestamp(cursor, expiration_str: str, passes: int = 7):
@@ -3771,6 +4524,8 @@ class ReportForm(FlaskForm):
 @app.route('/')
 def index():
     return redirect(url_for('home'))
+
+    
 @app.route('/home')
 def home():
     # CSRF token for JS POSTs
