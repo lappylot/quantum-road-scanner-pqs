@@ -1,8 +1,4 @@
-
-# QuantumRoadScanner.com
-
-https://quantumroadscanner.com (live)
-
+telecom forked qrs to help with telecom secueity
 ## Demo Videos:
 
 https://hub.docker.com/r/graylanquantum/quantum_road_scanner
