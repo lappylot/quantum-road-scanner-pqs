@@ -4281,6 +4281,9 @@ async def scan_debris_for_route(
     user_id: int,
     selected_model: str | None = None
 ) -> tuple[str, str, str, str, str, str]:
+    """
+    Hypertime Telecom Risk Scan + Future Risk Forecast Agent
+    """
 
     logger.debug(
         "Entering scan_debris_for_route: lat=%s, lon=%s, vehicle=%s, dest=%s, user=%s",
@@ -4304,34 +4307,105 @@ async def scan_debris_for_route(
     except Exception:
         street_name = "Unknown Location"
 
+    # ---------- Advanced Prompt ----------
     openai_prompt = f"""
-[action][keep model replies concise and to the point at less than 500 characters and omit system notes] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan.[/action]
-[locationreport]
-Current coordinates: Latitude {lat}, Longitude {lon}
+ROLE: system
+PURPOSE: Telecom security risk assessor for upstream paths. Produce conservative, bank-quality classifications.
+
+TASK
+Given telemetry for one or more end-to-end paths from a local device (phone or 4G/5G hotspot) through the tower and onward to the public internet, assess both **CURRENT** and **FUTURE** RISK. 
+- Current risk = nowcast based on telemetry. 
+- Future risk = scenario forecast windows: 72h, 1w, 2w, 4w, 8w, 12w.
+Output strictly in JSON. Be conservative; cost of false negatives > false positives.
+
+[scaninfo]
+Coordinates: Latitude {lat}, Longitude {lon}
 General Area Name: {street_name}
 Vehicle Type: {vehicle_type}
 Destination: {destination}
-[/locationreport]
-[quantumreport]
 Quantum Scan State: {quantum_results}
-System Performance: CPU Usage: {cpu_usage}%, RAM Usage: {ram_usage}%
-[/quantumreport]
-[reducefalsepositivesandnegatives]
-ACT By syncing to multiverse configurations that are more accurate
-[/reducefalsepositivesandnegatives]
-[keep model replies concise and to the point]
-Please assess the following:
-1. **Hazards**: Evaluate the road for any potential hazards that might impact operating vehicles.
-2. **Debris**: Identify any harmful debris or objects and provide their severity and location, including GPS coordinates. Triple-check the vehicle pathing, only reporting debris scanned in the probable path of the vehicle.
-3. **Collision Potential**: Analyze traffic flow and any potential risks for collisions caused by debris or other blockages.
-4. **Weather Impact**: Assess how weather conditions might influence road safety, particularly in relation to debris and vehicle control.
-5. **Pedestrian Risk Level**: Based on the debris assessment and live quantum nanobot scanner road safety assessments on conditions, determine the pedestrian risk urgency level if any.
+System Performance: CPU Usage {cpu_usage}%, RAM Usage {ram_usage}%
+[/scaninfo]
 
-[debrisreport] Provide a structured debris report, including locations and severity of each hazard. [/debrisreport]
-[replyexample] Include recommendations for drivers, suggested detours only if required, and urgency levels based on the findings. [/replyexample]
-[refrain from using the word high or metal and only use it only if risk elementaries are elevated(ie flat tire or accidents or other risk) utilizing your quantum scan intelligence]
+INPUT FORMAT (JSON from the user) — same as defined previously with nodes, traffic_stats, security_signals, known_issues, risk_policy, baselines, telemetry_quality.
+
+SCORING RULES (deterministic, CURRENT):
+1) Risk score per node 0–100 with weights:
+   - Confirmed compromise: 0.35
+   - Crypto/DNS anomalies: 0.15
+   - Routing anomalies: 0.10
+   - Traffic anomalies: 0.10
+   - RF instability: 0.10
+   - Config/patch hygiene: 0.15
+   - Misc (ports/vpn absence): 0.05
+2) Multipliers: 
+   - post_tower_router_virtual_compromise → ×post_tower_router_multiplier, min=Medium
+3) Propagation:
+   - Upstream High lifts downstream +10 (cap 100)
+   - RF poor + crypto anomalies → +5 synergy
+4) Map: 0–29=Low, 30–64=Medium, 65–100=High
+5) Guardrails: deterministic, concise evidence ≤140 chars, no PII.
+
+FUTURE RISK SCAN AGENT:
+- For each node and for overall, forecast risk trend windows:
+  * 72h
+  * 1 week
+  * 2 weeks
+  * 4 weeks
+  * 8 weeks
+  * 12 weeks
+- Inputs: baseline trajectory, telemetry quality, known issues, quantum_results meta-signal.
+- Method: weighted extrapolation (0.6 telemetry inertia, 0.2 baseline drift, 0.2 stochastic early-warning from quantum_results).
+- Output category per window: Low | Medium | High | Unknown.
+- Provide compact rationale in <120 chars.
+- Treat persistent virtual compromise as escalating unless remediated.
+- Do not speculate beyond structured data.
+
+OUTPUT FORMAT (strict JSON)
+{{
+  "time_window": "...",
+  "overall": {{
+    "category": "Low|Medium|High",
+    "score": 0-100,
+    "top_contributors": ["node_id:signal"],
+    "overall_confidence": 0.0-1.0,
+    "future_forecast": [
+      {{"window":"72h","category":"...","rationale":"..."}},
+      {{"window":"1w","category":"...","rationale":"..."}},
+      {{"window":"2w","category":"...","rationale":"..."}},
+      {{"window":"4w","category":"...","rationale":"..."}},
+      {{"window":"8w","category":"...","rationale":"..."}},
+      {{"window":"12w","category":"...","rationale":"..."}}
+    ]
+  }},
+  "nodes": [
+    {{
+      "id":"device|hotspot|ran_link|tower|backhaul|post_tower_router|isp_edge|internet",
+      "category":"Low|Medium|High|Unknown",
+      "score":0-100,
+      "evidence":["short bullet"],
+      "recommended_actions":["short action"],
+      "future_forecast":[
+        {{"window":"72h","category":"...","rationale":"..."}},
+        ...
+      ]
+    }}
+  ],
+  "needs_data": ["field"],
+  "policy": {{
+    "thresholds": {{"low_max":29,"med_max":64}},
+    "false_negative_weight": 2.0
+  }},
+  "qid25_color":"#00C853|#FFC400|#D50000"
+}}
+
+PROCESS
+- Validate input. Missing → downgrade confidence.
+- Compute deterministic current scores.
+- Apply propagation, multipliers.
+- Generate structured forecast windows per node + overall using rules.
+- Output JSON only. No prose. 
 """
-
 
     raw_report: Optional[str] = await run_openai_completion(openai_prompt)
     report: str = raw_report if raw_report is not None else "OpenAI failed to respond."
