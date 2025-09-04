@@ -562,7 +562,7 @@ RATE_LIMIT_COUNT = 13
 RATE_LIMIT_WINDOW = timedelta(minutes=15)
 
 config_lock = threading.Lock()
-DB_FILE = Path('/var/data') / 'secure_data.db'
+DB_FILE = BASE_DIR / 'secure_data.db'
 EXPIRATION_HOURS = 65
 
 app.config.update(SESSION_COOKIE_SECURE=True,
