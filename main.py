@@ -4273,39 +4273,47 @@ async def phf_filter_input(input_text: str) -> tuple[bool, str]:
     logger.warning("PHF processing failed; defaulting to Unsafe.")
     return False, "PHF processing failed."
 
+
+
+
 async def scan_debris_for_route(
     lat: float,
     lon: float,
     vehicle_type: str,
     destination: str,
     user_id: int,
-    selected_model: str | None = None
+    selected_model: str = None
 ) -> tuple[str, str, str, str, str, str]:
-
+    
     logger.debug(
         "Entering scan_debris_for_route: lat=%s, lon=%s, vehicle=%s, dest=%s, user=%s",
         lat, lon, vehicle_type, destination, user_id
     )
 
-    model_used = selected_model or "OpenAI"
+    # Always use OpenAI
+    model_used = "OpenAI"
 
+    # 1) Resource usage
     try:
         cpu_usage, ram_usage = get_cpu_ram_usage()
     except Exception:
         cpu_usage, ram_usage = 0.0, 0.0
 
+    # 2) Quantum scan
     try:
         quantum_results = quantum_hazard_scan(cpu_usage, ram_usage)
     except Exception:
         quantum_results = "Scan Failed"
 
+    # 3) Reverse-geocode street name via OpenAI
     try:
         street_name = await fetch_street_name_llm(lat, lon)
     except Exception:
         street_name = "Unknown Location"
 
+    # 4) Build the OpenAI-only prompt
     openai_prompt = f"""
-[action][keep model replies concise and to the point at less than 500 characters and omit system notes] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan.[/action]
+[action] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan. [/action]
 [locationreport]
 Current coordinates: Latitude {lat}, Longitude {lon}
 General Area Name: {street_name}
@@ -4319,7 +4327,7 @@ System Performance: CPU Usage: {cpu_usage}%, RAM Usage: {ram_usage}%
 [reducefalsepositivesandnegatives]
 ACT By syncing to multiverse configurations that are more accurate
 [/reducefalsepositivesandnegatives]
-[keep model replies concise and to the point]
+
 Please assess the following:
 1. **Hazards**: Evaluate the road for any potential hazards that might impact operating vehicles.
 2. **Debris**: Identify any harmful debris or objects and provide their severity and location, including GPS coordinates. Triple-check the vehicle pathing, only reporting debris scanned in the probable path of the vehicle.
@@ -4329,14 +4337,13 @@ Please assess the following:
 
 [debrisreport] Provide a structured debris report, including locations and severity of each hazard. [/debrisreport]
 [replyexample] Include recommendations for drivers, suggested detours only if required, and urgency levels based on the findings. [/replyexample]
-[refrain from using the word high or metal and only use it only if risk elementaries are elevated(ie flat tire or accidents or other risk) utilizing your quantum scan intelligence]
 """
 
-
-    raw_report: Optional[str] = await run_openai_completion(openai_prompt)
-    report: str = raw_report if raw_report is not None else "OpenAI failed to respond."
+    # 5) Call OpenAI
+    report = await run_openai_completion(openai_prompt) or "OpenAI failed to respond."
     report = report.strip()
 
+    # 6) Determine harm level (if needed downstream)
     harm_level = calculate_harm_level(report)
 
     logger.debug("Exiting scan_debris_for_route with model_used=%s", model_used)
@@ -4349,146 +4356,63 @@ Please assess the following:
         model_used,
     )
 
+
+ 
+
 async def run_openai_completion(prompt):
-
-    logger = logging.getLogger(__name__)
-
-    logger.debug("Entering run_openai_completion with prompt length: %d",
-                 len(prompt) if prompt else 0)
-
+    logger.debug("Entering run_openai_completion with prompt length: %d", len(prompt) if prompt else 0)
     max_retries = 5
-    backoff_factor = 2
-    delay = 1
-
     openai_api_key = os.getenv('OPENAI_API_KEY')
     if not openai_api_key:
         logger.error("OpenAI API key not found in environment variables.")
         logger.debug("Exiting run_openai_completion early due to missing API key.")
         return None
 
-    timeout = httpx.Timeout(120.0, connect=40.0, read=40.0, write=40.0)
-    url = "https://api.openai.com/v1/responses"
-
-    async def _extract_text_from_responses(payload: dict) -> Union[str, None]:
-
-        if isinstance(payload.get("text"), str) and payload["text"].strip():
-            return payload["text"].strip()
-
-        out = payload.get("output")
-        if isinstance(out, list) and out:
-            parts = []
-            for item in out:
-
-                if isinstance(item, str) and item.strip():
-                    parts.append(item.strip())
-                    continue
-                if not isinstance(item, dict):
-                    continue
-
-                content = item.get("content") or item.get("contents") or item.get("data") or []
-                if isinstance(content, list):
-                    for c in content:
-                        if isinstance(c, str) and c.strip():
-                            parts.append(c.strip())
-                        elif isinstance(c, dict):
-
-                            if "text" in c and isinstance(c["text"], str) and c["text"].strip():
-                                parts.append(c["text"].strip())
-
-                            elif "parts" in c and isinstance(c["parts"], list):
-                                for p in c["parts"]:
-                                    if isinstance(p, str) and p.strip():
-                                        parts.append(p.strip())
-
-                if isinstance(item.get("text"), str) and item["text"].strip():
-                    parts.append(item["text"].strip())
-            if parts:
-                return "\n\n".join(parts)
-
-
-        choices = payload.get("choices")
-        if isinstance(choices, list) and choices:
-            for ch in choices:
-                if isinstance(ch, dict):
-
-                    message = ch.get("message") or ch.get("delta")
-                    if isinstance(message, dict):
-
-                        content = message.get("content")
-                        if isinstance(content, str) and content.strip():
-                            return content.strip()
-                        if isinstance(content, list):
-
-                            for c in content:
-                                if isinstance(c, str) and c.strip():
-                                    return c.strip()
-                                if isinstance(c, dict) and isinstance(c.get("text"), str) and c["text"].strip():
-                                    return c["text"].strip()
-
-                    if isinstance(ch.get("text"), str) and ch["text"].strip():
-                        return ch["text"].strip()
-
-        return None
+    timeout = httpx.Timeout(60.0, connect=20.0, read=20.0)
+    backoff_factor = 2
+    delay = 1
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         for attempt in range(1, max_retries + 1):
             try:
                 logger.debug("run_openai_completion attempt %d sending request.", attempt)
-
                 headers = {
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {openai_api_key}"
                 }
-
-                payload = {
-                    "model": "gpt-5",      
-                    "input": prompt,                
-                    "max_output_tokens": 1200,      
-
-                    "reasoning": {"effort": "minimal"},
-
+                data = {
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.7
                 }
 
-                response = await client.post(url, json=payload, headers=headers)
-
+                response = await client.post("https://api.openai.com/v1/chat/completions", json=data, headers=headers)
                 response.raise_for_status()
-
-                data = response.json()
-
-
-                reply = await _extract_text_from_responses(data)
-                if reply:
-                    logger.debug("run_openai_completion succeeded on attempt %d.", attempt)
-                    return reply.strip()
-                else:
-
-                    logger.error(
-                        "Responses API returned 200 but no usable text. Keys: %s",
-                        list(data.keys())
-                    )
-
+                result = response.json()
+                clean_content = result["choices"][0]["message"]["content"].strip()
+                logger.info("run_openai_completion succeeded on attempt %d.", attempt)
+                logger.debug("Exiting run_openai_completion with successful response.")
+                return clean_content
 
             except (httpx.TimeoutException, httpx.ConnectTimeout) as e:
                 logger.error("Attempt %d failed due to timeout: %s", attempt, e, exc_info=True)
-            except httpx.HTTPStatusError as e:
-
-                body_text = None
-                try:
-                    body_text = e.response.json()
-                except Exception:
-                    body_text = e.response.text
-                logger.error("Responses API error (status=%s): %s", e.response.status_code, body_text)
-            except (httpx.RequestError, KeyError, json.JSONDecodeError, Exception) as e:
+            except httpx.RequestError as e:
+                logger.error("Attempt %d failed due to request error: %s", attempt, e, exc_info=True)
+            except KeyError as e:
+                logger.error("Attempt %d failed due to missing expected key in response: %s", attempt, e, exc_info=True)
+            except json.JSONDecodeError as e:
+                logger.error("Attempt %d failed due to JSON parsing error: %s", attempt, e, exc_info=True)
+            except Exception as e:
                 logger.error("Attempt %d failed due to unexpected error: %s", attempt, e, exc_info=True)
 
             if attempt < max_retries:
-                logger.debug("Retrying run_openai_completion after delay.")
+                logger.info("Retrying run_openai_completion after delay.")
                 await asyncio.sleep(delay)
                 delay *= backoff_factor
 
     logger.warning("All attempts to run_openai_completion have failed. Returning None.")
+    logger.debug("Exiting run_openai_completion with failure.")
     return None
-
 
 class LoginForm(FlaskForm):
     username = StringField('Username',
