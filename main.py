@@ -3400,41 +3400,35 @@ Please assess the following:
 [replyexample] Include recommendations for drivers, suggested detours only if required, and urgency levels based on the findings. [/replyexample]
 """.strip()
   
-def _call_llm(prompt: str):
 
-    client = _maybe_httpx_client()
-    if not client:
-        return None
+# === CHANGED: /api/risk/stream — stream regex-mapped wheel JSON ===
+@app.route("/api/risk/stream")
+def api_stream():
+    uid = _user_id()
 
-    model = os.environ.get("OPENAI_MODEL", "gpt-4o")
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7,
-        "max_tokens": 260,
-        "response_format": {"type": "json_object"}, 
-    }
+    @stream_with_context
+    def gen():
+        for _ in range(24):
+            sig = _system_signals(uid)
+            prompt = _build_guess_prompt(uid, sig)
+            txt = _call_llm(prompt)
 
+            meta = {"ts": datetime.utcnow().isoformat() + "Z", "mode": "guess", "sig": sig}
+            if not txt:
+                payload = {"error": "llm_unavailable", "server_enriched": meta}
+            else:
+                wheel = risk_wheel_from_llm_text(txt, sig=sig)
+                wheel["server_enriched"] = meta
+                payload = wheel
 
-    for attempt in range(3):
-        try:
-            r = client.post(_CHAT_PATH, json=payload)
-            if r.status_code in (429, 500, 502, 503, 504):
-                time.sleep(0.5 * (2 ** attempt) + random.random() * 0.3)
-                continue
+            yield f"data: {json.dumps(payload, separators=(',',':'))}\n\n"
+            time.sleep(3.2)
 
-            r.raise_for_status()
-            data = r.json()
-            txt = (data.get("choices", [{}])[0]
-                       .get("message", {})
-                       .get("content") or "").strip()
-            return _safe_json_parse(_sanitize(txt))
-        except httpx.HTTPError:
-            time.sleep(0.25)
-        except Exception:
-            break
+    resp = Response(gen(), mimetype="text/event-stream")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"
+    return _attach_cookie(resp)
 
-    return None
 # ---------- APIs ----------
 @app.route("/api/theme/personalize", methods=["GET"])
 def api_theme_personalize():
@@ -3442,92 +3436,34 @@ def api_theme_personalize():
     seed = colorsync.sample(uid)
     return jsonify({"hex": seed.get("hex", "#49c2ff"), "code": seed.get("qid25",{}).get("code","B2")})
 
-@app.route("/api/risk/llm_route", methods=["POST"])
-def api_llm_route():
+
+# === CHANGED: /api/risk/stream — stream regex-mapped wheel JSON ===
+@app.route("/api/risk/stream")
+def api_stream():
     uid = _user_id()
-    body = request.get_json(force=True, silent=True) or {}
 
-    # --- robust numeric coercion for coordinates ---
-    from decimal import Decimal, InvalidOperation
-    import math
+    @stream_with_context
+    def gen():
+        for _ in range(24):
+            sig = _system_signals(uid)
+            prompt = _build_guess_prompt(uid, sig)
+            txt = _call_llm(prompt)
 
-    def _coerce_coord(val, *, minv: float, maxv: float, default: float = 0.0) -> float:
-        """
-        Safely coerce a JSON value to a bounded float coordinate.
-        - Accepts numbers or numeric strings.
-        - Rejects NaN/Infinity and booleans.
-        - Clamps to [minv, maxv].
-        - Defaults to `default` on any issue.
-        """
-        if isinstance(val, bool):
-            return default
-
-        try:
-            if isinstance(val, (int, float)):
-                if isinstance(val, float) and not math.isfinite(val):
-                    return default
-                d = Decimal(str(val))
-            elif isinstance(val, str):
-                s = val.strip()
-                if len(s) == 0 or len(s) > 64:
-                    return default
-                d = Decimal(s)
+            meta = {"ts": datetime.utcnow().isoformat() + "Z", "mode": "guess", "sig": sig}
+            if not txt:
+                payload = {"error": "llm_unavailable", "server_enriched": meta}
             else:
-                return default
-        except (InvalidOperation, ValueError, TypeError):
-            return default
+                wheel = risk_wheel_from_llm_text(txt, sig=sig)
+                wheel["server_enriched"] = meta
+                payload = wheel
 
-        if d.is_nan() or d.is_infinite():
-            return default
+            yield f"data: {json.dumps(payload, separators=(',',':'))}\n\n"
+            time.sleep(3.2)
 
-        d_min = Decimal(str(minv))
-        d_max = Decimal(str(maxv))
-        if d < d_min:
-            d = d_min
-        elif d > d_max:
-            d = d_max
-
-        try:
-            d = d.quantize(Decimal("0.000001"))
-        except InvalidOperation:
-            pass
-
-        f = float(d)
-        if not math.isfinite(f):
-            return default
-
-        if f < minv:
-            f = minv
-        elif f > maxv:
-            f = maxv
-        return f
-
-    route = {
-        "lat": _coerce_coord(body.get("lat", 0),  minv=-90.0,  maxv=90.0),
-        "lon": _coerce_coord(body.get("lon", 0),  minv=-180.0, maxv=180.0),
-    }
-
-    sig = _system_signals(uid)
-    prompt = _build_route_prompt(uid, sig, route)
-
-    # LLM only — no fallback
-    data = _call_llm(prompt)
-    meta = {
-        "ts": datetime.utcnow().isoformat() + "Z",
-        "mode": "route",
-        "sig": sig,
-        "route": route,
-    }
-
-    if not isinstance(data, dict):
-        # Graceful error so the frontend can ignore this tick
-        payload = {"error": "llm_unavailable", "server_enriched": meta}
-        return _attach_cookie(jsonify(payload)), 503
-
-    data["server_enriched"] = meta
-    return _attach_cookie(jsonify(data))
-
-
+    resp = Response(gen(), mimetype="text/event-stream")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"
+    return _attach_cookie(resp)
 # === CHANGED: /api/risk/stream — stream regex-mapped wheel JSON ===
 @app.route("/api/risk/stream")
 def api_stream():
