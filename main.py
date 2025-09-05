@@ -1,6 +1,3 @@
-
-
-
 from __future__ import annotations 
 import logging
 import httpx
@@ -897,7 +894,122 @@ SEALED_FILE  = SEALED_DIR / "sealed.json.enc"
 SEALED_VER   = "SS1"
 SHARDS_ENV   = "QRS_SHARDS_JSON"
 
+# === NEW: Regex-based risk wheel mapping (used by home route wheel) ===
+import re, json
 
+_RISK_MAP = [
+    {"label":"Clear",         "word":"low",      "range":(0.00,0.20), "color":"#22d3a6"},
+    {"label":"Caution",       "word":"medium",   "range":(0.41,0.60), "color":"#ffb300"},
+    {"label":"Elevated",      "word":"high",     "range":(0.61,0.80), "color":"#ff8f1f"},
+    {"label":"Critical",      "word":"critical", "range":(0.81,1.00), "color":"#ff3b1f"},
+]
+_WORD_ALIASES = {
+    "ok":"low","clear":"low","safe":"low",
+    "light":"medium","mod":"medium","med":"medium","moderate":"medium","avg":"medium",
+    "severe":"critical","very high":"critical","extreme":"critical","max":"critical",
+}
+
+def _tier_index_from_word(w: str) -> int:
+    w = (w or "").lower().strip()
+    w = _WORD_ALIASES.get(w, w)
+    for i, t in enumerate(_RISK_MAP):
+        if t["word"] == w:
+            return i
+    return 1  # default medium
+
+def _tier_index_from_text(text: str) -> int:
+    t = (text or "").lower()
+    for key in ("critical","high","medium","low"):
+        if re.search(rf"\b{key}\b", t):
+            return _tier_index_from_word(key)
+    for ali, canon in _WORD_ALIASES.items():
+        if re.search(rf"\b{re.escape(ali)}\b", t):
+            return _tier_index_from_word(canon)
+    # soft heuristics
+    if any(k in t for k in ("crash","pileup","closure")): return _tier_index_from_word("high")
+    if any(k in t for k in ("minor","clear","unobstructed")): return _tier_index_from_word("low")
+    return 1
+
+def _bump_if_metal(idx: int, text: str, sig: dict|None) -> int:
+    hay = (text or "").lower()
+    if sig:
+        try: hay += " " + json.dumps(sig, separators=(',',':')).lower()
+        except Exception: pass
+    return min(idx+1, len(_RISK_MAP)-1) if any(m in hay for m in (" metal","metal ","steel","rebar","metal-debris")) else idx
+
+def _mid(lo: float, hi: float) -> float:
+    return round((lo+hi)/2.0, 2)
+
+def _confidence_guess(idx: int, text: str) -> float:
+    m = re.search(r"(\d{1,3})\s*%", text or "")
+    if m:
+        v = max(0, min(100, int(m.group(1))))/100.0
+        return round(v, 2)
+    return [0.95,0.85,0.80,0.78][idx]
+
+def _reasons(text: str) -> list[str]:
+    out = []
+    t = (text or "").lower()
+    if "debris" in t: out.append("Debris reported on route")
+    if any(k in t for k in ("collision","crash","pileup")): out.append("Collision potential present")
+    if any(k in t for k in ("rain","snow","ice","weather","wind")): out.append("Weather may reduce control")
+    if "pedestrian" in t: out.append("Pedestrian activity nearby")
+    if any(k in t for k in ("metal","steel","rebar")): out.append("Metal object detected")
+    if not out: out = ["General conditions stable","Maintain standard caution"]
+    return out[:5]
+
+def _blurb(idx: int) -> str:
+    return [
+        "Road looks good; stay alert and follow local rules.",
+        "Some risks present; slow slightly and increase spacing.",
+        "Heightened risk; consider alternate route and drive defensively.",
+        "Severe risk; avoid if possible or reroute immediately."
+    ][idx][:118]
+
+def _normalize_json_if_present(txt: str) -> dict|None:
+    try:
+        obj = json.loads(txt)
+        if isinstance(obj, dict) and all(k in obj for k in ("harm_ratio","label","color","confidence","reasons","blurb")):
+            return obj
+    except Exception:
+        pass
+    try:
+        s = txt[txt.find("{"):txt.rfind("}")+1]
+        obj = json.loads(s)
+        if isinstance(obj, dict): return obj
+    except Exception:
+        pass
+    return None
+
+def _to_wheel_json(idx: int, text: str) -> dict:
+    tier = _RISK_MAP[idx]
+    lo, hi = tier["range"]
+    return {
+        "harm_ratio": float(f"{_mid(lo,hi):.2f}"),
+        "label": tier["label"],
+        "color": tier["color"],
+        "confidence": float(f"{_confidence_guess(idx, text):.2f}"),
+        "reasons": _reasons(text),
+        "blurb": _blurb(idx),
+    }
+
+def risk_wheel_from_llm_text(text: str, *, sig: dict|None=None) -> dict:
+    """
+    Accept ANY LLM output.
+    1) If it already returned wheel JSON, use it.
+    2) Else detect risk words in the narrative and map → wheel JSON.
+    3) If 'metal' is present, bump severity one tier (color changes).
+    """
+    obj = _normalize_json_if_present(text)
+    if obj:
+        base_text = json.dumps(obj, separators=(',',':'))
+        idx = _tier_index_from_text(base_text)
+        idx = _bump_if_metal(idx, base_text, sig)
+        return _to_wheel_json(idx, base_text)
+
+    idx = _tier_index_from_text(text)
+    idx = _bump_if_metal(idx, text, sig)
+    return _to_wheel_json(idx, text)
 
 @dataclass(frozen=True, slots=True)   
 class SealedRecord:
@@ -3415,9 +3527,10 @@ def api_llm_route():
     data["server_enriched"] = meta
     return _attach_cookie(jsonify(data))
 
+
+# === CHANGED: /api/risk/stream — stream regex-mapped wheel JSON ===
 @app.route("/api/risk/stream")
 def api_stream():
-
     uid = _user_id()
 
     @stream_with_context
@@ -3425,21 +3538,22 @@ def api_stream():
         for _ in range(24):
             sig = _system_signals(uid)
             prompt = _build_guess_prompt(uid, sig)
-            data = _call_llm(prompt) 
+            txt = _call_llm(prompt)
 
             meta = {"ts": datetime.utcnow().isoformat() + "Z", "mode": "guess", "sig": sig}
-            if not data:
+            if not txt:
                 payload = {"error": "llm_unavailable", "server_enriched": meta}
             else:
-                data["server_enriched"] = meta
-                payload = data
+                wheel = risk_wheel_from_llm_text(txt, sig=sig)
+                wheel["server_enriched"] = meta
+                payload = wheel
 
             yield f"data: {json.dumps(payload, separators=(',',':'))}\n\n"
             time.sleep(3.2)
 
     resp = Response(gen(), mimetype="text/event-stream")
     resp.headers["Cache-Control"] = "no-cache"
-    resp.headers["X-Accel-Buffering"] = "no"   
+    resp.headers["X-Accel-Buffering"] = "no"
     return _attach_cookie(resp)
     
 def _safe_get(d: Dict[str, Any], keys: List[str], default: str = "") -> str:
