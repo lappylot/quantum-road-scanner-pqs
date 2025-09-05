@@ -3401,34 +3401,69 @@ Please assess the following:
 """.strip()
   
 
-# === CHANGED: /api/risk/stream — stream regex-mapped wheel JSON ===
-@app.route("/api/risk/stream")
-def api_stream():
+# === CHANGED: /api/risk/llm_route — map LLM text → wheel JSON via regex ===
+@app.route("/api/risk/llm_route", methods=["POST"])
+def api_llm_route():
     uid = _user_id()
+    body = request.get_json(force=True, silent=True) or {}
 
-    @stream_with_context
-    def gen():
-        for _ in range(24):
-            sig = _system_signals(uid)
-            prompt = _build_guess_prompt(uid, sig)
-            txt = _call_llm(prompt)
-
-            meta = {"ts": datetime.utcnow().isoformat() + "Z", "mode": "guess", "sig": sig}
-            if not txt:
-                payload = {"error": "llm_unavailable", "server_enriched": meta}
+    # robust numeric coercion for coordinates (unchanged)
+    from decimal import Decimal, InvalidOperation
+    import math
+    def _coerce_coord(val, *, minv: float, maxv: float, default: float = 0.0) -> float:
+        if isinstance(val, bool):
+            return default
+        try:
+            if isinstance(val, (int, float)):
+                if isinstance(val, float) and not math.isfinite(val):
+                    return default
+                d = Decimal(str(val))
+            elif isinstance(val, str):
+                s = val.strip()
+                if len(s) == 0 or len(s) > 64:
+                    return default
+                d = Decimal(s)
             else:
-                wheel = risk_wheel_from_llm_text(txt, sig=sig)
-                wheel["server_enriched"] = meta
-                payload = wheel
+                return default
+        except (InvalidOperation, ValueError, TypeError):
+            return default
+        if d.is_nan() or d.is_infinite():
+            return default
+        d_min = Decimal(str(minv)); d_max = Decimal(str(maxv))
+        if d < d_min: d = d_min
+        elif d > d_max: d = d_max
+        try: d = d.quantize(Decimal("0.000001"))
+        except InvalidOperation: pass
+        f = float(d)
+        if not math.isfinite(f): return default
+        if f < minv: f = minv
+        elif f > maxv: f = maxv
+        return f
 
-            yield f"data: {json.dumps(payload, separators=(',',':'))}\n\n"
-            time.sleep(3.2)
+    route = {
+        "lat": _coerce_coord(body.get("lat", 0),  minv=-90.0,  maxv=90.0),
+        "lon": _coerce_coord(body.get("lon", 0),  minv=-180.0, maxv=180.0),
+    }
 
-    resp = Response(gen(), mimetype="text/event-stream")
-    resp.headers["Cache-Control"] = "no-cache"
-    resp.headers["X-Accel-Buffering"] = "no"
-    return _attach_cookie(resp)
+    sig = _system_signals(uid)
+    prompt = _build_route_prompt(uid, sig, route)
 
+    # LLM (raw text), then regex map → wheel JSON
+    txt = _call_llm(prompt)
+    meta = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "mode": "route",
+        "sig": sig,
+        "route": route,
+    }
+
+    if not isinstance(txt, str) or not txt.strip():
+        payload = {"error": "llm_unavailable", "server_enriched": meta}
+        return _attach_cookie(jsonify(payload)), 503
+
+    wheel = risk_wheel_from_llm_text(txt, sig={**sig, **route})
+    wheel["server_enriched"] = meta
+    return _attach_cookie(jsonify(wheel))
 # ---------- APIs ----------
 @app.route("/api/theme/personalize", methods=["GET"])
 def api_theme_personalize():
