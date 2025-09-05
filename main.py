@@ -3400,7 +3400,61 @@ Please assess the following:
 [replyexample] Include recommendations for drivers, suggested detours only if required, and urgency levels based on the findings. [/replyexample]
 """.strip()
   
+import json, time
 
+def _build_guess_prompt(user_id: str, sig: dict) -> str:
+    # Pull fields from sig with safe fallbacks
+    lat = sig.get("lat") or sig.get("latitude") or 0.0
+    lon = sig.get("lon") or sig.get("longitude") or 0.0
+    vehicle_type = sig.get("vehicle_type", "unknown")
+    destination = sig.get("destination", "unknown")
+    street_name = sig.get("street_name", "Unknown Location")
+    cpu = sig.get("cpu", sig.get("cpu_usage", 0.0))
+    ram = sig.get("ram", sig.get("ram_usage", 0.0))
+    quantum_results = (
+        sig.get("quantum_state_sig")
+        or sig.get("quantum_scan")
+        or "unavailable"
+    )
+
+    now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Keep the raw signals around (useful for debug, if you want)
+    signals_compact = json.dumps(sig, separators=(",", ":"))
+
+    return f"""
+Now: {now_str}
+UserId: "{user_id}"
+Signals: {signals_compact}
+
+[action] You are a Quantum Hypertime Nanobot Road Hazard Scanner tasked with analyzing the road conditions and providing a detailed report on any detected hazards, debris, or potential collisions. Leverage quantum data and environmental factors to ensure a comprehensive scan. [/action]
+
+[locationreport]
+Current coordinates: Latitude {lat}, Longitude {lon}
+General Area Name: {street_name}
+Vehicle Type: {vehicle_type}
+Destination: {destination}
+[/locationreport]
+
+[quantumreport]
+Quantum Scan State: {quantum_results}
+System Performance: CPU Usage: {cpu}%, RAM Usage: {ram}%
+[/quantumreport]
+
+[reducefalsepositivesandnegatives]
+ACT By syncing to multiverse configurations that are more accurate
+[/reducefalsepositivesandnegatives]
+
+Please assess the following:
+1. **Hazards**: Evaluate the road for any potential hazards that might impact operating vehicles.
+2. **Debris**: Identify any harmful debris or objects and provide their severity and location, including GPS coordinates. Triple-check the vehicle pathing, only reporting debris scanned in the probable path of the vehicle.
+3. **Collision Potential**: Analyze traffic flow and any potential risks for collisions caused by debris or other blockages.
+4. **Weather Impact**: Assess how weather conditions might influence road safety, particularly in relation to debris and vehicle control.
+5. **Pedestrian Risk Level**: Based on the debris assessment and live quantum nanobot scanner road safety assessments on conditions, determine the pedestrian risk urgency level if any.
+
+[debrisreport] Provide a structured debris report, including locations and severity of each hazard. [/debrisreport]
+[replyexample] Include recommendations for drivers, suggested detours only if required, and urgency levels based on the findings. [/replyexample]
+""".strip()
 # === CHANGED: /api/risk/llm_route — map LLM text → wheel JSON via regex ===
 @app.route("/api/risk/llm_route", methods=["POST"])
 def api_llm_route():
