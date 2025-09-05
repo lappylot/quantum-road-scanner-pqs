@@ -3455,18 +3455,26 @@ Please assess the following:
 [debrisreport] Provide a structured debris report, including locations and severity of each hazard. [/debrisreport]
 [replyexample] Include recommendations for drivers, suggested detours only if required, and urgency levels based on the findings. [/replyexample]
 """.strip()
-# === CHANGED: /api/risk/llm_route — map LLM text → wheel JSON via regex ===
+
+
+from flask import request, jsonify
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+import math
+
 @app.route("/api/risk/llm_route", methods=["POST"])
 def api_llm_route():
-    uid = _user_id()
+    # Safely get user ID
+    try:
+        uid = str(_user_id())
+    except Exception:
+        uid = "anon"
+
     body = request.get_json(force=True, silent=True) or {}
 
-    # robust numeric coercion for coordinates (unchanged)
-    from decimal import Decimal, InvalidOperation
-    import math
+    # --- Robust coordinate coercion ---
     def _coerce_coord(val, *, minv: float, maxv: float, default: float = 0.0) -> float:
-        if isinstance(val, bool):
-            return default
+        if isinstance(val, bool): return default
         try:
             if isinstance(val, (int, float)):
                 if isinstance(val, float) and not math.isfinite(val):
@@ -3474,35 +3482,40 @@ def api_llm_route():
                 d = Decimal(str(val))
             elif isinstance(val, str):
                 s = val.strip()
-                if len(s) == 0 or len(s) > 64:
-                    return default
+                if not (0 < len(s) <= 64): return default
                 d = Decimal(s)
             else:
                 return default
         except (InvalidOperation, ValueError, TypeError):
             return default
-        if d.is_nan() or d.is_infinite():
-            return default
-        d_min = Decimal(str(minv)); d_max = Decimal(str(maxv))
-        if d < d_min: d = d_min
-        elif d > d_max: d = d_max
+
+        if d.is_nan() or d.is_infinite(): return default
+        d = min(max(d, Decimal(str(minv))), Decimal(str(maxv)))
         try: d = d.quantize(Decimal("0.000001"))
         except InvalidOperation: pass
         f = float(d)
-        if not math.isfinite(f): return default
-        if f < minv: f = minv
-        elif f > maxv: f = maxv
-        return f
+        return f if math.isfinite(f) else default
 
-    route = {
-        "lat": _coerce_coord(body.get("lat", 0),  minv=-90.0,  maxv=90.0),
-        "lon": _coerce_coord(body.get("lon", 0),  minv=-180.0, maxv=180.0),
-    }
+    lat = _coerce_coord(body.get("lat", 0),  minv=-90.0,  maxv=90.0)
+    lon = _coerce_coord(body.get("lon", 0),  minv=-180.0, maxv=180.0)
+    route = {"lat": lat, "lon": lon}
 
+    # Pull system signals and inject lat/lon into copy
     sig = _system_signals(uid)
-    prompt = _build_route_prompt(uid, sig, route)
+    sig = dict(sig or {})  # shallow copy to avoid mutation
+    sig.update(route)
 
-    # LLM (raw text), then regex map → wheel JSON
+    # Build robust prompt
+    try:
+        prompt = _build_guess_prompt(uid, sig)
+    except Exception as e:
+        return jsonify({
+            "error": "prompt_generation_failed",
+            "details": str(e),
+            "server_enriched": {"sig": sig, "route": route}
+        }), 500
+
+    # Call LLM
     txt = _call_llm(prompt)
     meta = {
         "ts": datetime.utcnow().isoformat() + "Z",
@@ -3515,9 +3528,18 @@ def api_llm_route():
         payload = {"error": "llm_unavailable", "server_enriched": meta}
         return _attach_cookie(jsonify(payload)), 503
 
-    wheel = risk_wheel_from_llm_text(txt, sig={**sig, **route})
-    wheel["server_enriched"] = meta
-    return _attach_cookie(jsonify(wheel))
+    try:
+        wheel = risk_wheel_from_llm_text(txt, sig={**sig, **route})
+        wheel["server_enriched"] = meta
+        return _attach_cookie(jsonify(wheel))
+    except Exception as e:
+        return jsonify({
+            "error": "wheel_parse_failed",
+            "details": str(e),
+            "server_enriched": meta,
+            "raw_llm_text": txt,
+        }), 500
+
 # ---------- APIs ----------
 @app.route("/api/theme/personalize", methods=["GET"])
 def api_theme_personalize():
