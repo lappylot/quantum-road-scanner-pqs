@@ -3499,34 +3499,7 @@ def api_stream():
     resp.headers["Cache-Control"] = "no-cache"
     resp.headers["X-Accel-Buffering"] = "no"
     return _attach_cookie(resp)
-# === CHANGED: /api/risk/stream — stream regex-mapped wheel JSON ===
-@app.route("/api/risk/stream")
-def api_stream():
-    uid = _user_id()
-
-    @stream_with_context
-    def gen():
-        for _ in range(24):
-            sig = _system_signals(uid)
-            prompt = _build_guess_prompt(uid, sig)
-            txt = _call_llm(prompt)
-
-            meta = {"ts": datetime.utcnow().isoformat() + "Z", "mode": "guess", "sig": sig}
-            if not txt:
-                payload = {"error": "llm_unavailable", "server_enriched": meta}
-            else:
-                wheel = risk_wheel_from_llm_text(txt, sig=sig)
-                wheel["server_enriched"] = meta
-                payload = wheel
-
-            yield f"data: {json.dumps(payload, separators=(',',':'))}\n\n"
-            time.sleep(3.2)
-
-    resp = Response(gen(), mimetype="text/event-stream")
-    resp.headers["Cache-Control"] = "no-cache"
-    resp.headers["X-Accel-Buffering"] = "no"
-    return _attach_cookie(resp)
-    
+#
 def _safe_get(d: Dict[str, Any], keys: List[str], default: str = "") -> str:
     for k in keys:
         v = d.get(k)
