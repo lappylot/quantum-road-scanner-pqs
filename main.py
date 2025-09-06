@@ -3552,143 +3552,195 @@ def login():
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    global registration_enabled
+    
+    registration_enabled: bool = is_registration_enabled()
+
     error_message = ""
     form = RegisterForm()
+
     if form.validate_on_submit():
-        username = form.username.data
-        password = form.password.data
+        username    = form.username.data
+        password    = form.password.data
         invite_code = form.invite_code.data if not registration_enabled else None
 
         success, message = register_user(username, password, invite_code)
         if success:
             flash(message, "success")
-            return redirect(url_for('login'))
-        else:
-            error_message = message
+            return redirect(url_for("login"))
 
-    return render_template_string("""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Register - QRS</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+        error_message = message
 
-    <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
-          integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-    <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
-          integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-          integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
-          integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
+    return render_template_string(
+        """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <title>Register - QRS</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 
-    <style>
-        body {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            color: #ffffff;
-            font-family: 'Roboto', sans-serif;
-        }
-        .navbar { background-color: transparent !important; }
-        .navbar .nav-link { color: #fff; }
-        .navbar .nav-link:hover { color: #66ff66; }
-        .container { max-width: 400px; margin-top: 100px; }
-        .walkd { padding: 30px; background-color: rgba(255, 255, 255, 0.1); border: none; border-radius: 15px; }
-        .error-message { color: #ff4d4d; }
-        .brand {
-            font-family: 'Orbitron', sans-serif;
-            font-size: 2.5rem;
-            font-weight: bold;
-            text-align: center;
-            margin-bottom: 20px;
-            background: -webkit-linear-gradient(#f0f, #0ff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        input, label, .btn, .error-message, a { color: #ffffff; }
-        input::placeholder { color: #cccccc; opacity: 0.7; }
-        .btn-primary {
-            background-color: #00cc00;
-            border-color: #00cc00;
-            font-weight: bold;
-            transition: background-color 0.3s, border-color 0.3s;
-        }
-        .btn-primary:hover {
-            background-color: #33ff33;
-            border-color: #33ff33;
-        }
-        a { text-decoration: none; }
-        a:hover { text-decoration: underline; color: #66ff66; }
-        @media (max-width: 768px) {
-            .container { margin-top: 50px; }
-            .brand { font-size: 2rem; }
-        }
-    </style>
-</head>
-<body>
-    <!-- Navbar with Login / Register -->
-    <nav class="navbar navbar-expand-lg navbar-dark">
-        <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
-        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav"
-            aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-            <span class="navbar-toggler-icon"></span>
-        </button>
+            <!-- fonts + css -->
+            <link rel="stylesheet"
+                  href="{{ url_for('static', filename='css/roboto.css') }}"
+                  integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE="
+                  crossorigin="anonymous">
+            <link rel="stylesheet"
+                  href="{{ url_for('static', filename='css/orbitron.css') }}"
+                  integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00="
+                  crossorigin="anonymous">
+            <link rel="stylesheet"
+                  href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
+                  integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo="
+                  crossorigin="anonymous">
+            <link rel="stylesheet"
+                  href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
+                  integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU="
+                  crossorigin="anonymous">
 
-        <div class="collapse navbar-collapse justify-content-end" id="navbarNav">
-            <ul class="navbar-nav">
-                <li class="nav-item"><a class="nav-link" href="{{ url_for('login') }}">Login</a></li>
-                <li class="nav-item"><a class="nav-link active" href="{{ url_for('register') }}">Register</a></li>
-            </ul>
-        </div>
-    </nav>
+            <style>
+                
+                body {
+                    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+                    color: #ffffff;
+                    font-family: "Roboto", sans-serif;
+                }
+                .container   { max-width: 400px; margin-top: 100px; }
+                .card-glass  {
+                    padding: 30px;
+                    background: rgba(255, 255, 255, 0.10);
+                    border: none;
+                    border-radius: 15px;
+                }
 
-    <div class="container">
-        <div class="walkd shadow">
-            <div class="brand">QRS</div>
-            <h3 class="text-center">Register</h3>
-            {% if error_message %}
-            <p class="error-message text-center">{{ error_message }}</p>
-            {% endif %}
-            <form method="POST" novalidate>
-                {{ form.hidden_tag() }}
-                <div class="form-group">
-                    {{ form.username.label }}
-                    {{ form.username(class="form-control", placeholder="Choose a username") }}
+                
+                .navbar                       { background: transparent !important; }
+                .navbar .nav-link             { color: #ffffff; }
+                .navbar .nav-link:hover       { color: #66ff66; }
+
+                
+                .brand {
+                    font-family: "Orbitron", sans-serif;
+                    font-size: 2.5rem;
+                    font-weight: bold;
+                    text-align: center;
+                    margin-bottom: 20px;
+                    background: -webkit-linear-gradient(#f0f, #0ff);
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                }
+
+                /* Forms / buttons */
+                input, label, .btn, a         { color: #ffffff; }
+                input::placeholder            { color: #cccccc; opacity: 0.7; }
+
+                .btn-primary {
+                    background-color: #00cc00;
+                    border-color:    #00cc00;
+                    font-weight:     bold;
+                    transition: background-color 0.3s, border-color 0.3s;
+                }
+                .btn-primary:hover {
+                    background-color: #33ff33;
+                    border-color:    #33ff33;
+                }
+
+                .error-message { color: #ff4d4d; }
+
+                /* Mobile tweaks */
+                @media (max-width: 768px) {
+                    .container { margin-top: 50px; }
+                    .brand     { font-size: 2rem; }
+                }
+            </style>
+        </head>
+        <body>
+
+            
+            <nav class="navbar navbar-expand-lg navbar-dark">
+                <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
+
+                <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav"
+                        aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+
+                <div class="collapse navbar-collapse justify-content-end" id="navbarNav">
+                    <ul class="navbar-nav">
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('login') }}">Login</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link active" href="{{ url_for('register') }}">Register</a>
+                        </li>
+                    </ul>
                 </div>
-                <div class="form-group">
-                    {{ form.password.label }}
-                    {{ form.password(class="form-control", placeholder="Choose a password") }}
-                    <small id="passwordStrength" class="form-text"></small>
-                </div>
-                {% if not registration_enabled %}
-                <div class="form-group">
-                    {{ form.invite_code.label }}
-                    {{ form.invite_code(class="form-control", placeholder="Enter invite code") }}
-                </div>
-                {% endif %}
-                {{ form.submit(class="btn btn-primary btn-block") }}
-            </form>
-            <p class="mt-3 text-center">Already have an account? <a href="{{ url_for('login') }}">Login here</a></p>
-        </div>
-    </div>
+            </nav>
 
-    <script>
-    document.addEventListener('DOMContentLoaded', function () {
-        var toggler = document.querySelector('.navbar-toggler');
-        var nav = document.getElementById('navbarNav');
-        if (toggler && nav) {
-            toggler.addEventListener('click', function () {
-                var isShown = nav.classList.toggle('show');
-                toggler.setAttribute('aria-expanded', isShown ? 'true' : 'false');
-            });
-        }
-    });
-    </script>
-</body>
-</html>
-    """, form=form, error_message=error_message, registration_enabled=registration_enabled)
+            
+            <div class="container">
+                <div class="card-glass shadow">
+                    <div class="brand">QRS</div>
+                    <h3 class="text-center">Register</h3>
 
+                    {% if error_message %}
+                        <p class="error-message text-center">{{ error_message }}</p>
+                    {% endif %}
+
+                    <form method="POST" novalidate>
+                        {{ form.hidden_tag() }}
+
+                        <div class="form-group">
+                            {{ form.username.label }}
+                            {{ form.username(class="form-control",
+                                             placeholder="Choose a username") }}
+                        </div>
+
+                        <div class="form-group">
+                            {{ form.password.label }}
+                            {{ form.password(class="form-control",
+                                             placeholder="Choose a password") }}
+                            <small id="passwordStrength" class="form-text"></small>
+                        </div>
+
+                        {% if not registration_enabled %}
+                            <div class="form-group">
+                                {{ form.invite_code.label }}
+                                {{ form.invite_code(class="form-control",
+                                                    placeholder="Enter invite code") }}
+                            </div>
+                        {% endif %}
+
+                        {{ form.submit(class="btn btn-primary btn-block") }}
+                    </form>
+
+                    <p class="mt-3 text-center">
+                        Already have an account?
+                        <a href="{{ url_for('login') }}">Login here</a>
+                    </p>
+                </div>
+            </div>
+
+            
+            <script>
+                document.addEventListener("DOMContentLoaded", () => {
+                    const toggler = document.querySelector(".navbar-toggler");
+                    const nav     = document.getElementById("navbarNav");
+
+                    if (toggler && nav) {
+                        toggler.addEventListener("click", () => {
+                            const shown = nav.classList.toggle("show");
+                            toggler.setAttribute("aria-expanded", shown ? "true" : "false");
+                        });
+                    }
+                });
+            </script>
+        </body>
+        </html>
+        """,
+        form=form,
+        error_message=error_message,
+        registration_enabled=registration_enabled,
+    )
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
