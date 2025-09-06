@@ -73,7 +73,7 @@ from pathlib import Path
 import os
 import json
 
-from waitressimport serve
+from waitress import serve
 import string
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.hashes import SHA3_512
