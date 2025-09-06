@@ -713,7 +713,7 @@ async def fetch_street_name_llm(lat: float, lon: float) -> str:
     except (httpx.RequestError, KeyError, Exception) as e:
         logger.error(f"LLM geocoding failed: {e}", exc_info=True)
         return reverse_geocode(lat, lon, cities)
-```0
+
 def save_street_name_to_db(lat: float, lon: float, street_name: str):
     lat_encrypted = encrypt_data(str(lat))
     lon_encrypted = encrypt_data(str(lon))
