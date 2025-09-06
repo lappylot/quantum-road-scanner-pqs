@@ -173,7 +173,7 @@ ENV_SIG_PUB_B64           = "QRS_SIG_PUB_B64"
 ENV_SIG_PRIV_ENC_B64      = "QRS_SIG_PRIV_ENC_B64"     # AESGCM(nonce|ct) b64
 ENV_SEALED_B64            = "QRS_SEALED_B64"           # sealed store JSON (env) b64
 
-# Small b64 helpers (env <-> bytes)
+
 def _b64set(name: str, raw: bytes) -> None:
     os.environ[name] = base64.b64encode(raw).decode("utf-8")
 
@@ -228,7 +228,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
     
     exports: list[tuple[str,str]] = []
 
-    # 1) Ensure passphrase & salt
+    
     if not os.getenv("ENCRYPTION_PASSPHRASE"):
         pw = _gen_passphrase()
         os.environ["ENCRYPTION_PASSPHRASE"] = pw
@@ -244,7 +244,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
         logger.info("Generated KDF salt to env.")
     kek = _derive_kek(passphrase, salt)
 
-    # 2) x25519
+    
     if not (os.getenv(ENV_X25519_PUB_B64) and os.getenv(ENV_X25519_PRIV_ENC_B64)):
         x_priv = x25519.X25519PrivateKey.generate()
         x_pub  = x_priv.public_key().public_bytes(
@@ -260,7 +260,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
         exports.append((ENV_X25519_PRIV_ENC_B64, base64.b64encode(x_enc).decode()))
         logger.info("Generated x25519 keypair to env.")
 
-    # 3) PQ KEM (strict mode requires it)
+    
     need_pq = strict_pq2 or os.getenv(ENV_PQ_KEM_ALG) or oqs is not None
     if need_pq:
         if oqs is None and strict_pq2:
@@ -282,7 +282,7 @@ def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> N
                 exports.append((ENV_PQ_PRIV_ENC_B64, base64.b64encode(pq_enc).decode()))
                 logger.info("Generated PQ KEM keypair (%s) to env.", alg)
 
-    # 4) Signature (PQ preferred; Ed25519 fallback if not strict)
+    
     if not (os.getenv(ENV_SIG_ALG) and os.getenv(ENV_SIG_PUB_B64) and os.getenv(ENV_SIG_PRIV_ENC_B64)):
         pq_sig = _detect_oqs_sig()
         if pq_sig:
@@ -964,21 +964,18 @@ def _try(f: Callable[[], Any]) -> bool:
 STRICT_PQ2_ONLY = bool(int(os.getenv("STRICT_PQ2_ONLY", "1")))
 
 def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
-    """
-    Populate hybrid (x25519 + optional PQ KEM) key handles from ENV,
-    falling back to the sealed cache when present. No files are touched.
-    """
+    
     cache = getattr(self, "_sealed_cache", None)
 
-    # ---- X25519 ----
+    
     x_pub_b   = _b64get(ENV_X25519_PUB_B64, required=False)
     x_privenc = _b64get(ENV_X25519_PRIV_ENC_B64, required=False)
 
     if x_pub_b:
-        # Env has the raw public key
+        
         self.x25519_pub = x_pub_b
     elif cache and cache.get("x25519_priv_raw"):
-        # Derive pub from sealed raw private (env didn't provide pub)
+        
         self.x25519_pub = (
             x25519.X25519PrivateKey
             .from_private_bytes(cache["x25519_priv_raw"])
@@ -989,12 +986,12 @@ def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
     else:
         raise RuntimeError("x25519 key material not found (neither ENV nor sealed cache).")
 
-    # If env doesn't carry the encrypted private, leave it empty;
-    # _decrypt_x25519_priv() will use the sealed cache path.
+    
+    
     self._x25519_priv_enc = x_privenc or b""
 
-    # ---- PQ KEM (ML-KEM) ----
-    # Prefer ENV alg; fall back to sealed cache hint
+    
+    
     self._pq_alg_name = os.getenv(ENV_PQ_KEM_ALG) or None
     if not self._pq_alg_name and cache and cache.get("kem_alg"):
         self._pq_alg_name = str(cache["kem_alg"]) or None
@@ -1002,17 +999,17 @@ def _km_load_or_create_hybrid_keys(self: "KeyManager") -> None:
     pq_pub_b   = _b64get(ENV_PQ_PUB_B64, required=False)
     pq_privenc = _b64get(ENV_PQ_PRIV_ENC_B64, required=False)
 
-    # Store what we have (pub for encap; priv_enc for decap via env path)
+    
     self.pq_pub       = pq_pub_b or None
     self._pq_priv_enc = pq_privenc or None
 
-    # In strict mode we must have: alg + pub + (priv via env or sealed cache)
+    
     if STRICT_PQ2_ONLY:
         have_priv = bool(pq_privenc) or bool(cache and cache.get("pq_priv_raw"))
         if not (self._pq_alg_name and self.pq_pub and have_priv):
             raise RuntimeError("Strict PQ2 mode: ML-KEM keys not fully available (need alg+pub+priv).")
 
-    # Log what we ended up with (helps debugging)
+    
     logger.info(
         "Hybrid keys loaded: x25519_pub=%s, pq_alg=%s, pq_pub=%s, pq_priv=%s (sealed=%s)",
         "yes" if self.x25519_pub else "no",
@@ -1038,16 +1035,13 @@ def _km_decrypt_x25519_priv(self: "KeyManager") -> x25519.X25519PrivateKey:
     return x25519.X25519PrivateKey.from_private_bytes(raw)
     
 def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
-    """
-    Return the raw ML-KEM private key bytes suitable for oqs decapsulation.
-    Prefers sealed cache; falls back to ENV-encrypted key if present.
-    """
-    # Prefer sealed cache (already raw)
+    
+    
     cache = getattr(self, "_sealed_cache", None)
     if cache is not None and cache.get("pq_priv_raw") is not None:
         return cache.get("pq_priv_raw")
 
-    # Otherwise try the env-encrypted private key
+  
     pq_alg = getattr(self, "_pq_alg_name", None)
     pq_enc = getattr(self, "_pq_priv_enc", None)
     if not (pq_alg and pq_enc):
@@ -1066,11 +1060,8 @@ def _km_decrypt_pq_priv(self: "KeyManager") -> Optional[bytes]:
 
 
 def _km_decrypt_sig_priv(self: "KeyManager") -> bytes:
-    """
-    Decrypts signature SK from ENV using Argon2id(passphrase + ENV_SALT_B64).
-    If a sealed_cache is present, returns raw from cache.
-    """
-    # Prefer sealed cache if available
+    
+    
     cache = getattr(self, "_sealed_cache", None)
     if cache is not None and "sig_priv_raw" in cache:
         return cache["sig_priv_raw"]
@@ -1109,13 +1100,8 @@ def _oqs_sig_name() -> Optional[str]:
 
 
 def _km_load_or_create_signing(self: "KeyManager") -> None:
-    """
-    ENV-only:
-      - Reads PQ/Ed25519 signing keys from ENV, or creates+stores them in ENV if missing.
-      - Private key is AESGCM( Argon2id( passphrase + ENV_SALT_B64 ) ).
-    Requires bootstrap_env_keys() to have set ENV_SALT_B64 at minimum.
-    """
-    # Try to read from ENV first
+    
+    
     alg = os.getenv(ENV_SIG_ALG) or None
     pub = _b64get(ENV_SIG_PUB_B64, required=False)
     enc = _b64get(ENV_SIG_PRIV_ENC_B64, required=False)
@@ -1136,7 +1122,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
 
         try_pq = _oqs_sig_name() if oqs is not None else None
         if try_pq:
-            # Generate PQ signature (ML-DSA/Dilithium)
+            
             with oqs.Signature(try_pq) as s:  # type: ignore[attr-defined]
                 pub_raw = s.generate_keypair()
                 sk_raw  = s.export_secret_key()
@@ -1150,7 +1136,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
         else:
             if STRICT_PQ2_ONLY:
                 raise RuntimeError("Strict PQ2 mode: ML-DSA signature required, but oqs unavailable.")
-            # Ed25519 fallback
+            999
             kp  = ed25519.Ed25519PrivateKey.generate()
             pub_raw = kp.public_key().public_bytes(
                 serialization.Encoding.Raw, serialization.PublicFormat.Raw
@@ -1167,7 +1153,7 @@ def _km_load_or_create_signing(self: "KeyManager") -> None:
             alg, pub, enc = "Ed25519", pub_raw, enc_raw
             logger.info("Generated Ed25519 signature keypair into ENV (fallback).")
 
-    # Cache into the instance
+    
     self.sig_alg_name = alg
     self.sig_pub = pub
     self._sig_priv_enc = enc
@@ -1202,8 +1188,6 @@ def _km_verify(self, pub: bytes, sig_bytes: bytes, data: bytes) -> bool:
     except Exception:
         return False
 
-# === Bind KeyManager monkeypatched methods (do this once, at the end) ===
-# === Bind KeyManager monkeypatched methods (ENV-only) ===
 _KM = cast(Any, KeyManager)
 _KM._oqs_kem_name               = _km_oqs_kem_name
 _KM._load_or_create_hybrid_keys = _km_load_or_create_hybrid_keys
@@ -1392,19 +1376,19 @@ class AuditTrail:
             logger.error(f"audit tail failed: {e}", exc_info=True)
         return out
 
-# 1) Generate any missing keys/salt/signing material into ENV (no files)
+
 bootstrap_env_keys(
     strict_pq2=STRICT_PQ2_ONLY,
     echo_exports=bool(int(os.getenv("QRS_BOOTSTRAP_SHOW","0")))
 )
 
-# 2) Proceed as usual, but everything now comes from ENV
+
 key_manager = KeyManager()
 encryption_key = key_manager.get_key()
 key_manager._sealed_cache = None
 key_manager.sealed_store = SealedStore(key_manager)
 
-# (Optional sealed cache in ENV – doesn't create files)
+
 if not key_manager.sealed_store.exists() and os.getenv("QRS_ENABLE_SEALED","1")=="1":
     key_manager._load_or_create_hybrid_keys()
     key_manager._load_or_create_signing()
@@ -1412,7 +1396,7 @@ if not key_manager.sealed_store.exists() and os.getenv("QRS_ENABLE_SEALED","1")=
 if key_manager.sealed_store.exists():
     key_manager.sealed_store.load_into_km()
 
-# Ensure runtime key handles are populated from ENV (no file paths)
+
 key_manager._load_or_create_hybrid_keys()
 key_manager._load_or_create_signing()
 
@@ -2052,8 +2036,6 @@ def enforce_admin_presence():
 
 create_tables()
 
-
-# --- run-once initializer (per Gunicorn worker) ---
 _init_done = False
 _init_lock = threading.Lock()
 
@@ -2064,12 +2046,12 @@ def init_app_once():
     with _init_lock:
         if _init_done:
             return
-        # whatever you previously had in before_first_request:
+        
         ensure_admin_from_env()
         enforce_admin_presence()
         _init_done = True
 
-# execute once when the worker imports your module
+
 with app.app_context():
     init_app_once()
 
