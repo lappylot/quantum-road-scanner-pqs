@@ -1,4 +1,4 @@
- Python 3.12 to match your project
+ 
 FROM python:3.12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
