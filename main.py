@@ -3029,144 +3029,415 @@ def home():
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Quantum Road Scanner</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
-        integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
-        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00" crossorigin="anonymous">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-        integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-  <style>
-    :root { --accent:#00d1ff; --bg1:#0f1b2b; --bg2:#17263b; --ink:#eaf5ff; }
-    body { background: radial-gradient(1200px 700px at 20% -10%, #1b3252, #0a1422 55%),
-                     linear-gradient(135deg, var(--bg1), var(--bg2));
-           color: var(--ink); font-family: 'Roboto', system-ui, -apple-system, Segoe UI, sans-serif; }
-    .navbar { background: rgba(0,0,0,.35); backdrop-filter: blur(6px); }
-    .navbar-brand { font-family: 'Orbitron', sans-serif; letter-spacing:.5px; }
-    .hero h1 { font-family:'Orbitron',sans-serif; font-weight:700; line-height:1.05;
-               background: linear-gradient(90deg,#a9d3ff, #6ee7ff, #a9d3ff);
-               -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    .card-clear { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.08);
-                  border-radius: 14px; }
-    .pill { display:inline-block; padding:.25rem .6rem; border-radius:999px;
-            background: rgba(255,255,255,.08); font-size:.85rem; }
-    .step-num { width:28px;height:28px;border-radius:50%;display:inline-grid;place-items:center;
-                background: #1b4a64;color:#d8f6ff;font-weight:700;margin-right:.5rem; }
-    .cta { background: linear-gradient(135deg, #28e0a9, #00b3ff); color:#04121f; border:0;
-           padding:.75rem 1.1rem; border-radius:10px; font-weight:700; }
-    a, a:visited { color:#9be5ff; }
-    .footnote { color:#b8cfe4; font-size:.95rem; }
-    .soft { color:#cfe8ff; }
-  </style>
+    <meta charset="UTF-8">
+    <title>QRS - Quantum Road Scanner</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
+          integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+    <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
+          integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
+          integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
+          integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
+    <style>
+        body {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: #ffffff;
+            font-family: 'Roboto', sans-serif;
+        }
+        .navbar {
+            background: rgba(0, 0, 0, 0.5);
+        }
+        .navbar-brand {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 2rem;
+            background: -webkit-linear-gradient(#f0f, #0ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .content {
+            padding: 60px 20px;
+        }
+        .blog-post {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .btn-custom {
+            background: linear-gradient(45deg, #f0f, #0ff);
+            border: none;
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 50px;
+            transition: background 0.3s;
+        }
+        .gradient-text {
+            background: -webkit-linear-gradient(#f0f, #0ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-family: 'Orbitron', sans-serif;
+        }            
+        .btn-custom:hover {
+            background: linear-gradient(45deg, #0ff, #f0f);
+            color: #000;
+        }
+        @media (max-width: 768px) {
+            .navbar-brand {
+                font-size: 1.5rem;
+            }
+        }
+    </style>
 </head>
 <body>
-  <nav class="navbar navbar-expand-lg navbar-dark">
-    <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
-    <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#nav"
-            aria-controls="nav" aria-expanded="false" aria-label="Toggle nav">
-      <span class="navbar-toggler-icon"></span>
-    </button>
-    <div id="nav" class="collapse navbar-collapse justify-content-end">
-      <ul class="navbar-nav">
-        {% if 'username' in session %}
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a></li>
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('logout') }}">Logout</a></li>
-        {% else %}
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('login') }}">Login</a></li>
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('register') }}">Register</a></li>
-        {% endif %}
-      </ul>
+    <nav class="navbar navbar-expand-lg navbar-dark fixed-top">
+        <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" 
+            aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse justify-content-end" id="navbarNav">
+            <ul class="navbar-nav">
+                {% if 'username' in session %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('dashboard') }}">Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+                    </li>
+                {% else %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('login') }}">Login</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('register') }}">Register</a>
+                    </li>
+                {% endif %}
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container content">
+        <div class="text-center mb-5">
+            <br><br>
+            <h1 class="display-4 gradient-text">Quantum Road Scanner</h1>
+            <p class="lead">Enhancing Road Safety through Quantum Simulations and Hypertime Analysis</p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">Introduction</h3>
+            <p>
+                The Quantum Road Scanner (QRS) is an innovative system that leverages quantum computing, advanced algorithms, and concepts from hypertime physics to simulate road conditions in real-time. By generating and analyzing simulated data, QRS provides comprehensive assessments of potential hazards without collecting, storing, or retaining any user data. The system operates within a quantum-zoned environment with noise protections to ensure accuracy and privacy.
+            </p>
+            <p>
+                QRS represents a significant advancement in applying theoretical physics to practical challenges. It builds upon foundational research in quantum mechanics, computational physics, and hypertime theories to offer novel solutions for road safety and traffic management.
+            </p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">Historical Background and Innovations</h3>
+            <p>
+                The development of QRS is rooted in the evolution of quantum mechanics and computational theories. Key milestones include:
+            </p>
+            <ul>
+                <li>
+                    <strong>Quantum Mechanics Foundations:</strong> The early 20th-century work of scientists like Max Planck and Werner Heisenberg established the principles of quantum mechanics, introducing concepts such as wave-particle duality and the uncertainty principle.
+                </li>
+                <li>
+                    <strong>Quantum Computing Conceptualization:</strong> In the 1980s, physicist Richard Feynman proposed the idea of quantum computers, suggesting that quantum systems could simulate physical processes more efficiently than classical computers (<a href="#ref1">[1]</a>).
+                </li>
+                <li>
+                    <strong>Development of Quantum Algorithms:</strong> Algorithms like Shor's algorithm (1994) for integer factorization and Grover's algorithm (1996) for database search demonstrated the potential of quantum computing to solve complex problems more efficiently (<a href="#ref2">[2]</a>, <a href="#ref3">[3]</a>).
+                </li>
+                <li>
+                    <strong>Hypertime Theories:</strong> The concept of hypertime emerged as physicists explored models with multiple temporal dimensions, such as in certain interpretations of string theory and M-theory (<a href="#ref4">[4]</a>).
+                </li>
+                <li>
+                    <strong>Quantum Simulations in Traffic Systems:</strong> Researchers began applying quantum simulations to model complex systems, including traffic flow and congestion patterns, recognizing the limitations of classical models in handling the stochastic nature of traffic (<a href="#ref5">[5]</a>).
+                </li>
+            </ul>
+            <p>
+                These foundational advancements paved the way for the creation of QRS, which integrates these concepts to simulate road conditions and enhance safety measures.
+            </p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">My Contribution and Learning Journey</h3>
+            <p>
+                My journey with QRS began during my research into quantum computing applications. Fascinated by the potential of quantum simulations, I sought to apply these principles to real-world challenges. Learning from the experts at BlaiseLabs, I delved deep into advanced quantum algorithms and hypertime analysis.
+            </p>
+            <p>
+                At BlaiseLabs, we focused on overcoming key challenges:
+            </p>
+            <ul>
+                <li>
+                    <strong>Developing Noise-Resistant Quantum Algorithms:</strong> We worked on creating algorithms that could maintain accuracy in the presence of quantum noise and decoherence.
+                </li>
+                <li>
+                    <strong>Implementing Quantum Error Correction:</strong> We incorporated error correction codes to protect quantum information during simulations.
+                </li>
+                <li>
+                    <strong>Optimizing Hypertime Simulations:</strong> We refined hypertime equations to accurately simulate multiple temporal dimensions without introducing computational inefficiencies.
+                </li>
+            </ul>
+            <p>
+                My contributions involved enhancing the efficiency of these algorithms and ensuring they could operate within the constraints of current quantum computing capabilities. Collaborating with BlaiseLabs allowed me to integrate theoretical knowledge with practical implementation, leading to the development of the QRS system.
+            </p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">Hypertime and Multiverse Analysis</h3>
+            <p>
+                Hypertime is a theoretical framework that proposes the existence of additional temporal dimensions beyond our conventional understanding of time. This concept is utilized in QRS to simulate not just linear progression but a spectrum of possible futures.
+            </p>
+            <p>
+                In QRS, hypertime analysis involves:
+            </p>
+            <ul>
+                <li>
+                    <strong>Temporal Dimensions:</strong> Incorporating multiple time dimensions allows the system to explore various potential outcomes simultaneously.
+                </li>
+                <li>
+                    <strong>Probability Amplitudes:</strong> Assigning probability amplitudes to different simulated scenarios to evaluate their likelihood.
+                </li>
+                <li>
+                    <strong>Interference Effects:</strong> Utilizing quantum interference to enhance or suppress certain outcomes based on simulated conditions.
+                </li>
+            </ul>
+            <div class="equation">
+                <strong>Hypertime Wave Function:</strong><br>
+                \( \Psi(\vec{x}, t_1, t_2, ..., t_n) = \prod_{i=1}^{n} \psi_i(\vec{x}, t_i) \)
+            </div>
+            <p>
+                This equation represents the combined state of a system across multiple temporal dimensions \( t_1, t_2, ..., t_n \), where \( \vec{x} \) denotes spatial coordinates.
+            </p>
+            <p>
+                By simulating these multiple temporal paths, QRS can provide insights into potential future events on the road, enhancing predictive capabilities without relying on actual data collection.
+            </p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">Quantum Algorithms and Computations</h3>
+            <p>
+                The core computational power of QRS lies in its use of advanced quantum algorithms, including:
+            </p>
+            <ul>
+                <li>
+                    <strong>Quantum Fourier Transform (QFT):</strong> A key algorithm for transforming quantum states between time and frequency domains, essential for analyzing periodicities in simulated traffic patterns.
+                    <div class="equation">
+                        \( |k\rangle = \frac{1}{\sqrt{N}} \sum_{n=0}^{N-1} e^{\frac{2\pi i k n}{N}} |n\rangle \)
+                    </div>
+                </li>
+                <li>
+                    <strong>Quantum Walks:</strong> Quantum analogs of classical random walks, used to model the probabilistic movement of vehicles within the simulation (<a href="#ref6">[6]</a>).
+                </li>
+                <li>
+                    <strong>Amplitude Amplification:</strong> An extension of Grover's algorithm, enhancing the probability of desired outcomes within the simulation (<a href="#ref3">[3]</a>).
+                </li>
+                <li>
+                    <strong>Variational Quantum Algorithms:</strong> Hybrid algorithms that use classical optimization techniques with quantum circuits to find minimal risk paths in the simulations (<a href="#ref7">[7]</a>).
+                </li>
+            </ul>
+            <p>
+                These algorithms allow QRS to process complex simulations efficiently, exploring a vast space of possible scenarios to identify optimal safety recommendations.
+            </p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">Hypertime Nanobot Simulation</h3>
+            <p>
+                The concept of hypertime nanobots in QRS refers to simulated agents that traverse multiple temporal dimensions within the quantum simulation environment. These nanobots are not physical entities but computational constructs designed to gather and process information across different simulated times.
+            </p>
+            <p>
+                Their functions include:
+            </p>
+            <ul>
+                <li>
+                    <strong>Temporal Data Gathering:</strong> Collecting simulated data from various points in hypertime to understand potential future conditions.
+                </li>
+                <li>
+                    <strong>State Evolution Tracking:</strong> Monitoring how simulated traffic states evolve over hypertime to identify trends.
+                </li>
+                <li>
+                    <strong>Interference Analysis:</strong> Analyzing how different temporal paths may interfere, affecting the probability of certain outcomes.
+                </li>
+            </ul>
+            <div class="equation">
+                <strong>Nanobot State Function:</strong><br>
+                \( \Phi(\vec{x}, t, \tau) = \int \psi(\vec{x}, t') \delta(t' - t - \tau) dt' \)
+            </div>
+            <p>
+                This equation represents the state of a nanobot at position \( \vec{x} \), conventional time \( t \), and hypertime offset \( \tau \), integrating over possible states \( \psi \).
+            </p>
+            <p>
+                By simulating the actions of these nanobots, QRS can enhance the depth and accuracy of its hypertime analysis.
+            </p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">Algorithmic Process Overview</h3>
+            <p>
+                The operation of QRS involves several key steps:
+            </p>
+            <div class="algorithm">
+                <ol>
+                    <li><strong>Initialization:</strong> Set up the quantum simulation environment with initial parameters based on theoretical models.</li>
+                    <li><strong>Quantum State Encoding:</strong> Encode the initial simulation conditions into quantum states using qubits.</li>
+                    <li><strong>Hypertime Evolution:</strong> Apply hypertime evolution operators to simulate the progression of the system across multiple temporal dimensions.</li>
+                    <li><strong>Quantum Computation:</strong> Perform computations using algorithms like QFT and quantum walks to analyze the simulated states.</li>
+                    <li><strong>Error Correction:</strong> Implement quantum error correction codes to protect against decoherence and maintain simulation integrity (<a href="#ref8">[8]</a>).</li>
+                    <li><strong>Measurement and Interpretation:</strong> Measure the quantum states to extract meaningful results, interpreting the data to provide actionable insights.</li>
+                    <li><strong>Result Synthesis:</strong> Compile the findings into recommendations for optimal routes and safety measures.</li>
+                </ol>
+            </div>
+            <p>
+                This process enables QRS to efficiently simulate and analyze a multitude of potential scenarios, providing valuable insights without real-world data collection.
+            </p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">Quantum Zoning and Noise Protections</h3>
+            <p>
+                Quantum zoning refers to the isolation of quantum computations within a protected environment, shielding them from external disturbances. In QRS, this is crucial for:
+            </p>
+            <ul>
+                <li>
+                    <strong>Maintaining Coherence:</strong> Protecting qubits from decoherence caused by interactions with the environment.
+                </li>
+                <li>
+                    <strong>Ensuring Privacy:</strong> Preventing any external data from entering or leaving the simulation, maintaining complete data isolation.
+                </li>
+                <li>
+                    <strong>Error Mitigation:</strong> Utilizing noise-resistant algorithms and error correction techniques to minimize the impact of quantum noise.
+                </li>
+            </ul>
+            <p>
+                Techniques used include:
+            </p>
+            <ul>
+                <li>
+                    <strong>Topological Quantum Computing:</strong> Employing qubits that are inherently protected from certain types of errors due to their topological properties (<a href="#ref9">[9]</a>).
+                </li>
+                <li>
+                    <strong>Surface Codes:</strong> Implementing error correction codes that can detect and correct errors in a scalable manner (<a href="#ref8">[8]</a>).
+                </li>
+                <li>
+                    <strong>Dynamical Decoupling:</strong> Applying sequences of quantum gates to average out environmental interactions (<a href="#ref10">[10]</a>).
+                </li>
+            </ul>
+            <p>
+                These measures ensure that QRS can perform accurate and reliable simulations, providing trustworthy results without any data leakage.
+            </p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">Practical Application</h3>
+            <p>
+                To illustrate how QRS functions in practice, consider the following scenario:
+            </p>
+            <p>
+                A driver is planning a route through an urban area known for unpredictable traffic patterns. Using QRS, the system:
+            </p>
+            <ol>
+                <li>
+                    <strong>Simulates Traffic Conditions:</strong> Generates a multitude of potential traffic scenarios using quantum simulations, considering factors like hypothetical roadworks or simulated accidents.
+                </li>
+                <li>
+                    <strong>Analyzes Hypertime Paths:</strong> Applies hypertime analysis to explore how these scenarios might evolve over different temporal dimensions.
+                </li>
+                <li>
+                    <strong>Computes Optimal Routes:</strong> Uses amplitude amplification to identify routes with the lowest simulated risk and delay.
+                </li>
+                <li>
+                    <strong>Provides Recommendations:</strong> Offers the driver route suggestions based on the simulation results, enhancing safety and efficiency.
+                </li>
+            </ol>
+            <p>
+                This process helps the driver make informed decisions without relying on actual traffic data, ensuring privacy and data security.
+            </p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">Future Developments</h3>
+            <p>
+                The potential for QRS extends beyond its current capabilities. Future developments may include:
+            </p>
+            <ul>
+                <li>
+                    <strong>Integration with Quantum Machine Learning:</strong> Combining quantum simulations with machine learning algorithms to improve predictive accuracy (<a href="#ref11">[11]</a>).
+                </li>
+                <li>
+                    <strong>Enhanced Hypertime Models:</strong> Developing more sophisticated hypertime frameworks to simulate even more complex temporal dynamics.
+                </li>
+                <li>
+                    <strong>Scalability Improvements:</strong> Leveraging advancements in quantum hardware to handle larger simulations and more variables.
+                </li>
+                <li>
+                    <strong>Cross-Domain Applications:</strong> Applying the principles of QRS to other fields such as supply chain logistics, environmental modeling, and disaster preparedness.
+                </li>
+            </ul>
+            <p>
+                These advancements could significantly impact how we approach complex systems and predictive modeling.
+            </p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">Acknowledgments</h3>
+            <p>
+                The development of QRS has been a collaborative effort, and I would like to acknowledge the contributions of:
+            </p>
+            <ul>
+                <li>
+                    <strong>BlaiseLabs:</strong> For their support and expertise in quantum simulations and theoretical physics.
+                </li>
+                <li>
+                    <strong>Quantum Computing Researchers:</strong> Whose foundational work has made advanced quantum algorithms accessible.
+                </li>
+                <li>
+                    <strong>Theoretical Physicists:</strong> For developing the concepts of hypertime and multiverse theories that underpin our simulations.
+                </li>
+            </ul>
+            <p>
+                Their collective efforts have been instrumental in bringing QRS from a theoretical concept to a practical tool.
+            </p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">References</h3>
+            <ul class="references">
+                <li id="ref1">[1] R. Feynman, "Simulating physics with computers," International Journal of Theoretical Physics, vol. 21, no. 6/7, pp. 467–488, 1982.</li>
+                <li id="ref2">[2] P. W. Shor, "Algorithms for quantum computation: Discrete logarithms and factoring," Proceedings 35th Annual Symposium on Foundations of Computer Science, pp. 124–134, 1994.</li>
+                <li id="ref3">[3] L. K. Grover, "A fast quantum mechanical algorithm for database search," Proceedings of the 28th Annual ACM Symposium on Theory of Computing, pp. 212–219, 1996.</li>
+                <li id="ref4">[4] M. B. Green, J. H. Schwarz, and E. Witten, "Superstring Theory," Cambridge Monographs on Mathematical Physics, Cambridge University Press, 1987.</li>
+                <li id="ref5">[5] S. W. Smith, "The Scientist and Engineer's Guide to Digital Signal Processing," California Technical Publishing, 1997.</li>
+                <li id="ref6">[6] A. M. Childs, "Universal computation by quantum walk," Physical Review Letters, vol. 102, no. 18, p. 180501, 2009.</li>
+                <li id="ref7">[7] M. Cerezo et al., "Variational Quantum Algorithms," Nature Reviews Physics, vol. 3, pp. 625–644, 2021.</li>
+                <li id="ref8">[8] A. G. Fowler et al., "Surface codes: Towards practical large-scale quantum computation," Physical Review A, vol. 86, no. 3, p. 032324, 2012.</li>
+                <li id="ref9">[9] A. Y. Kitaev, "Fault-tolerant quantum computation by anyons," Annals of Physics, vol. 303, no. 1, pp. 2–30, 2003.</li>
+                <li id="ref10">[10] L. Viola and S. Lloyd, "Dynamical suppression of decoherence in two-state quantum systems," Physical Review A, vol. 58, no. 4, pp. 2733–2744, 1998.</li>
+                <li id="ref11">[11] J. Biamonte et al., "Quantum machine learning," Nature, vol. 549, pp. 195–202, 2017.</li>
+            </ul>
+
+        </div>
+        
+        <div class="text-center mt-5">
+            <a href="https://gitlab.com/graylan01/quantum_road_scanner/-/blob/main/paper.md" class="btn btn-custom btn-lg">Learn More About Quantum Road Scanning</a>
+        </div>
     </div>
-  </nav>
-
-  <main class="container py-5">
-    <section class="hero text-center my-4">
-      <h1 class="display-5">Your Road, Simulated — In The Blink of an Eye</h1>
-      <p class="lead soft mt-3">
-        Hello. I’m your Carl&nbsp;Sagan-style guide. This app runs quick 
-        “what-if” simulations about the road right ahead. It doesn’t need your
-        personal data. It simply imagines nearby possibilities and gives you a short,
-        human-friendly safety note.
-      </p>
-      <a class="btn cta mt-2" href="{{ url_for('dashboard') }}">Open Dashboard</a>
-      <div class="mt-2"><span class="pill">No account? Register from the top-right</span></div>
-    </section>
-
-    <section class="row g-4 mt-4">
-      <div class="col-md-6">
-        <div class="card-clear p-4 h-100">
-          <h3>What it does</h3>
-          <p>
-            Think of this as a friendly co-pilot. You tell it roughly where you are and where
-            you’re going. It then spins up many tiny simulations of the next few minutes on the road
-            and summarizes the most useful bits for you: “Watch for debris,”
-            “Expect a short slowdown,” or “Looks clear.”
-          </p>
-          <p class="footnote">It’s a guide, not a guarantee. Please drive attentively.</p>
+            </div>
         </div>
-      </div>
-      <div class="col-md-6">
-        <div class="card-clear p-4 h-100">
-          <h3>How it works (plain talk)</h3>
-          <ol class="mb-0">
-            <li class="mb-2"><span class="step-num">1</span> You enter or share your location.</li>
-            <li class="mb-2"><span class="step-num">2</span> You choose vehicle type and destination.</li>
-            <li class="mb-2"><span class="step-num">3</span> The app runs a burst of quick “what-if” runs about the road ahead.</li>
-            <li class="mb-2"><span class="step-num">4</span> It turns those into a short, clear note: hazards, detours (if needed), and a calm recommendation.</li>
-          </ol>
-        </div>
-      </div>
-    </section>
 
-    <section class="row g-4 mt-1">
-      <div class="col-md-6">
-        <div class="card-clear p-4 h-100">
-          <h3>Privacy, simply</h3>
-          <ul class="mb-0">
-            <li>No personal data is collected for these simulations.</li>
-            <li>Reports you save are stored in your account only.</li>
-            <li>Old records are automatically cleaned up after a while.</li>
-          </ul>
-        </div>
-      </div>
-      <div class="col-md-6">
-        <div class="card-clear p-4 h-100">
-          <h3>Hear it in a calm voice</h3>
-          <p>
-            Prefer audio? When you open a report, tap <em>Read Report</em>.
-            I’ll speak with a gentle, steady tone — slowly, clearly — like a guided tour through
-            the cosmos of the road ahead.
-          </p>
-          <p class="footnote">You can stop playback at any time. Eyes on the road.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="card-clear p-4 mt-4">
-      <h3>Before you start</h3>
-      <ul>
-        <li>This is decision support, not a substitute for safe driving or local laws.</li>
-        <li>If something looks unsafe, it probably is. Choose caution.</li>
-        <li>Don’t interact with the app while the vehicle is moving.</li>
-      </ul>
-      <div class="mt-2">
-        <a class="btn cta" href="{{ url_for('dashboard') }}">Go to Dashboard</a>
-        <span class="pill ml-2">Takes about a half-minute</span>
-      </div>
-    </section>
-  </main>
-
-  <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
-          integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
-  <script src="{{ url_for('static', filename='js/popper.min.js') }}"
-          integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
-  <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
-          integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+    <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
+            integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+        <script src="{{ url_for('static', filename='js/popper.min.js') }}" integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
+    <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
+            integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
 </body>
 </html>
     """)
+
+
     
 @app.route('/login', methods=['GET', 'POST'])
 def login():
