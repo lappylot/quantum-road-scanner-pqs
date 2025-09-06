@@ -631,6 +631,7 @@ def approximate_country(lat, lon, cities):
         return city.get('countrycode', 'UNKNOWN')
     return 'UNKNOWN'
 
+
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
     openai_api_key = os.getenv("OPENAI_API_KEY")
     likely_country_code = approximate_country(lat, lon, cities)
@@ -651,13 +652,18 @@ async def fetch_street_name_llm(lat: float, lon: float) -> str:
             city_hint = nearest_city.get('name', 'Unknown')
             distance_hint = f"{distance_to_city:.2f} km from {city_hint}"
 
-        llm_prompt = f""" 
-        [action]You are an Advanced Hypertime Nanobot Reverse-Geocoder with quantum synergy.
-        Determine the most precise City, County, and State based on the provided coordinates
-        using quantum data, known city proximity, and any country/regional hints.
-        Discard uncertain data below 98% reliability.[/action]
+        llm_prompt = f"""
+        [action]
+        You are an Advanced Hypertime Nanobot Reverse-Geocoder with quantum synergy.
+        Determine the most precise City, County, and State for the coordinates below
+        using quantum data, known city proximity, and country hints. Discard any result
+        with reliability below 98%.
+        [/action]
 
-        [coordinates] Latitude: {lat} Longitude: {lon} [/coordinates]
+        [coordinates]
+        Latitude: {lat}
+        Longitude: {lon}
+        [/coordinates]
 
         [local_context]
         Nearest known city (heuristic): {city_hint}
@@ -666,9 +672,31 @@ async def fetch_street_name_llm(lat: float, lon: float) -> str:
         Quantum state data: {quantum_state_str}
         [/local_context]
 
-        [request_format]
-        "City, County, State" or "Unknown Location"
-        [/request_format]
+        [quality_checks]
+        1) Triple-check that the city belongs to the stated county and the county belongs to the stated state.
+        2) Triple-check that the state is valid for the likely country code.
+        3) Triple-check spelling of proper nouns.
+        4) If any check fails or confidence < 98%, return "Unknown Location".
+        [/quality_checks]
+
+        [multiverse_extension]
+        Generate XYZT multiverse coordinates in the QID25 frame aligned to this location and quantum state.
+        Use four floating point values with 3 decimals precision:
+        X, Y, Z in QID-units. T is the resonance timestamp, positive for forward resonance.
+        The XYZT values must be consistent with the chosen location and quantum_state_data.
+        [/multiverse_extension]
+
+        [example_output]
+        City: [CityHere]
+        County: [CountyHere]
+        State: [StateHere]
+        XYZT: [XHere, YHere, ZHere, THere]
+        Confidence: [ConfidencePercent]%
+        [/example_output]
+
+        Fill in the placeholders [CityHere], [CountyHere], [StateHere], [XHere], [YHere], [ZHere], [THere], and [ConfidencePercent].
+        Output must match the example format exactly, one field per line, with no extra commentary.
+        If accuracy is below 98% after triple-checks, respond with "Unknown Location".
         """
 
         openai_result = await run_openai_completion(llm_prompt)
@@ -676,18 +704,16 @@ async def fetch_street_name_llm(lat: float, lon: float) -> str:
             return reverse_geocode(lat, lon, cities)
 
         location_data = openai_result.strip()
-        if location_data:
-            if "unknown" in location_data.lower():
-                return reverse_geocode(lat, lon, cities)
-            clean_location = bleach.clean(location_data, tags=[], strip=True)
-            return clean_location
-        else:
+        if not location_data or "unknown" in location_data.lower():
             return reverse_geocode(lat, lon, cities)
+
+        clean_location = bleach.clean(location_data, tags=[], strip=True)
+        return clean_location
 
     except (httpx.RequestError, KeyError, Exception) as e:
         logger.error(f"LLM geocoding failed: {e}", exc_info=True)
         return reverse_geocode(lat, lon, cities)
-        
+```0
 def save_street_name_to_db(lat: float, lon: float, street_name: str):
     lat_encrypted = encrypt_data(str(lat))
     lon_encrypted = encrypt_data(str(lon))
