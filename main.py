@@ -107,11 +107,7 @@ try:
 except Exception:
     oqs = cast(Any, None)
 
-from werkzeug.middleware.proxy_fix import ProxyFix
-try:
-    import fcntl  
-except Exception:
-    fcntl = None
+
 class SealedCache(TypedDict, total=False):
     x25519_priv_raw: bytes
     pq_priv_raw: Optional[bytes]
@@ -125,51 +121,74 @@ except Exception:
 
 
 
+
+STRICT_PQ2_ONLY = True
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-STRICT_PQ2_ONLY = True
+
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(logging.INFO)
 
-formatter = logging.Formatter(
-    '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
-
 
 logger.addHandler(console_handler)
 
 app = Flask(__name__)
 
-class _StartupOnceMiddleware:
-    def __init__(self, wsgi_app):
-        self.wsgi_app = wsgi_app
-        self._did = False
-        self._lock = threading.Lock()
-
-    def __call__(self, environ, start_response):
-        if not self._did:
-            with self._lock:
-                if not self._did:
-                    try:
-                        start_background_jobs_once()
-                    except Exception:
-                        logger.exception("Failed to start background jobs")
-                    else:
-                        self._did = True
-        return self.wsgi_app(environ, start_response)
-
-# install AFTER ProxyFix
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
-app.wsgi_app = _StartupOnceMiddleware(app.wsgi_app)
-
-
 SECRET_KEY = os.getenv("INVITE_CODE_SECRET_KEY")
 if not SECRET_KEY:
-    raise ValueError(
-        "INVITE_CODE_SECRET_KEY environment variable is not defined!")
+    raise ValueError("SECRET_KEY environment variable is not defined!")
 
 if isinstance(SECRET_KEY, str):
     SECRET_KEY = SECRET_KEY.encode("utf-8")
+
+def generate_very_strong_secret_key():
+    base_key = secrets.token_bytes(24) 
+    derived_key = hashlib.scrypt(
+        password=base_key,
+        salt=secrets.token_bytes(16), 
+        n=16384, 
+        r=4,     
+        p=1,     
+        dklen=32
+    )
+    return derived_key
+
+def get_very_complex_random_interval():
+    base_interval = secrets.choice(range(15, 25)) 
+    additional_randomness = secrets.randbelow(600)  
+    return (base_interval * 60) + additional_randomness
+
+def rotate_secret_key():
+    lock = threading.Lock()
+    while True:
+        with lock:
+            app.secret_key = generate_very_strong_secret_key()
+            logger.info("Secret key rotated securely.")
+        time.sleep(get_very_complex_random_interval())
+
+BASE_DIR = Path(__file__).parent.resolve()
+
+key_rotation_thread = threading.Thread(target=rotate_secret_key, daemon=True)
+key_rotation_thread.start()
+
+RATE_LIMIT_COUNT = 13
+RATE_LIMIT_WINDOW = timedelta(minutes=15)
+
+config_lock = threading.Lock()
+DB_FILE = BASE_DIR / 'secure_data.db'
+EXPIRATION_HOURS = 65
+
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Strict',
+    WTF_CSRF_TIME_LIMIT=3600,
+    SECRET_KEY=SECRET_KEY
+)
+
+
 
 _entropy_state = {
     "wheel":
@@ -452,127 +471,6 @@ def generate_very_strong_secret_key():
 
     return final_key
 
-
-def get_very_complex_random_interval():
-
-    c = psutil.cpu_percent()
-    r = psutil.virtual_memory().percent
-    cw = int.from_bytes(next(_entropy_state["wheel"]), 'big')
-    rng = _entropy_state["rng"].integers(7, 15)
-    base = (9 * 60) + secrets.randbelow(51 * 60)
-    jitter = int((c * r * 13 + cw * 7 + rng) % 311)
-    return base + jitter
-
-RECENT_KEYS = deque(maxlen=5) 
-
-def _get_all_secret_keys():
-
-    current = getattr(app, "secret_key", None)
-    others = [k for k in list(RECENT_KEYS) if k is not current and k is not None]
-    return [current] + others if current else others
-
-class MultiKeySessionInterface(SecureCookieSessionInterface):
-    serializer = TaggedJSONSerializer()
-
-    def _make_serializer(self, secret_key):
-        if not secret_key:
-            return None
-        signer_kwargs = dict(key_derivation=self.key_derivation,
-                             digest_method=self.digest_method)
-        return URLSafeTimedSerializer(secret_key, salt=self.salt,
-                                      serializer=self.serializer,
-                                      signer_kwargs=signer_kwargs)
-
-    def open_session(self, app, request):
-        cookie_name = self.get_cookie_name(app)  
-        s = request.cookies.get(cookie_name)
-        if not s:
-            return self.session_class()
-
-        max_age = int(app.permanent_session_lifetime.total_seconds())
-        for key in _get_all_secret_keys():
-            ser = self._make_serializer(key)
-            if not ser:
-                continue
-            try:
-                data = ser.loads(s, max_age=max_age)
-                return self.session_class(data)
-            except (BadTimeSignature, BadSignature, Exception):
-                continue
-        return self.session_class()
-
-    def save_session(self, app, session, response):
-        key = getattr(app, "secret_key", None)
-        ser = self._make_serializer(key)
-        if not ser:
-            return
-
-        cookie_name = self.get_cookie_name(app) 
-        domain = self.get_cookie_domain(app)
-        path = self.get_cookie_path(app)
-
-        if not session:
-            if session.modified:
-                response.delete_cookie(
-                    cookie_name,
-                    domain=domain,
-                    path=path,
-                    secure=self.get_cookie_secure(app),
-                    samesite=self.get_cookie_samesite(app),
-                )
-            return
-
-        httponly = self.get_cookie_httponly(app)
-        secure = self.get_cookie_secure(app)
-        samesite = self.get_cookie_samesite(app)
-        expires = self.get_expiration_time(app, session)
-
-        val = ser.dumps(dict(session))
-        response.set_cookie(
-            cookie_name,           
-            val,
-            expires=expires,
-            httponly=httponly,
-            domain=domain,
-            path=path,
-            secure=secure,
-            samesite=samesite,
-        )
-
-
-app.session_interface = MultiKeySessionInterface()
-
-def rotate_secret_key():
-    lock = threading.Lock()
-    while True:
-        with lock:
-            sk = generate_very_strong_secret_key()
-
-            prev = getattr(app, "secret_key", None)
-            if prev:
-                RECENT_KEYS.appendleft(prev)
-            app.secret_key = sk
-            fp = base64.b16encode(sk[:6]).decode()
-            logger.debug(f"Secret key rotated (fp={fp})")
-        time.sleep(get_very_complex_random_interval())
-
-BASE_DIR = Path(__file__).parent.resolve()
-
-
-
-RATE_LIMIT_COUNT = 13
-RATE_LIMIT_WINDOW = timedelta(minutes=15)
-
-config_lock = threading.Lock()
-DB_FILE = BASE_DIR / 'secure_data.db'
-EXPIRATION_HOURS = 65
-
-app.config.update(SESSION_COOKIE_SECURE=True,
-                  SESSION_COOKIE_HTTPONLY=True,
-                  SESSION_COOKIE_SAMESITE='Strict',
-                  WTF_CSRF_TIME_LIMIT=3600,
-                  SECRET_KEY=SECRET_KEY)
-
 csrf = CSRFProtect(app)
 
 @app.after_request
@@ -586,6 +484,7 @@ def apply_csp(response):
                   "base-uri 'self'; ")
     response.headers['Content-Security-Policy'] = csp_policy
     return response
+  
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.I | re.M)
 def _sanitize(s: str) -> str:
     if not isinstance(s, str):
