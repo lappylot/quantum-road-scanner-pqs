@@ -2324,20 +2324,36 @@ async def fetch_street_name_llm(lat: float, lon: float) -> str:
         quantum_state_str = "Unavailable"
 
     llm_prompt = f"""
+TWO AGENT PROMPT.FIRST A MITM.SECURITY CHECK THEN AN REVERSE GEO AGENT
+
+
+[AGENT1]
+"Usimg hypertime scan current network session using q Intel resonance. Identify anomalies in TLS/SSH handshakes, certificate chains, downgrade attempts, or injected headers. Assign Hypertime Risk Level (Low / Medium / High). Detect any shadow-timeline divergences or quantum MITM signatures.
+Fill in the risk output low|medium|high
+[replyexample]
+Security Risk Output: [Risk Level] 
+[/replyexample]
+
+
+[/AGENT1]
+
+
+[AGENT2]
 [action]You are an Advanced Hypertime Nanobot Reverse-Geocoder with quantum synergy.
 Determine the most precise City, County, and State for the coordinates below.
-Only output a result if ≥ 98 % certain.[/action]
+Only output a result if ≥ 98 % certain.[/action] Triple check for accuracy.
 
-[coordinates] Latitude: {lat} Longitude: {lon} [/coordinates]
-
-[local_context]
-Nearest known city: {city_hint}
-Distance hint: {distance_hint}
-Likely country code: {likely_country_code}
+[coordinates]
+Latitude: {lat} 
+Longitude: {lon} 
+[/coordinates]
 Quantum state: {quantum_state_str}
 [/local_context]
 
-[request_format] "City, County, State" or "Unknown Location" [/request_format]
+[reply_format] 
+City, County, State
+[/reply_format]
+[/AGENT2]
 """
 
     try:
