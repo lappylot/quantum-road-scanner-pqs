@@ -72,6 +72,8 @@ import numpy as np
 from pathlib import Path
 import os
 import json
+
+from waitressimport serve
 import string
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.hashes import SHA3_512
@@ -6527,7 +6529,6 @@ async def reverse_geocode_route():
             )
             return jsonify({"error": "Internal server error."}), 500
 
-
-
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=3000, debug=False)
+    serve(app, host='0.0.0.0', port=3000, threads=4)
+
