@@ -5105,279 +5105,207 @@ startAuto();
 
 
 
-
-
+# --- Auth routes (login / register / logout) — SRI'd templates, CSRF, rate-limit ---
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    error_message = ""
+    # already logged in? go to dashboard
+    if session.get('username'):
+        return redirect(url_for('dashboard'))
+
     form = LoginForm()
     if form.validate_on_submit():
-        username = form.username.data
-        password = form.password.data
-        if authenticate_user(username, password):
-            session['username'] = username
+        uname = (form.username.data or "").strip()
+        # rate limit if we can map the username to an ID
+        uid = get_user_id(uname)
+        if uid is not None and not check_rate_limit(uid):
+            flash("Too many attempts. Please wait a bit and try again.", "warning")
+            # render the page again without leaking that the username exists
+            return _attach_cookie(render_template_string(LOGIN_TPL, form=form)), 429
+
+        if authenticate_user(uname, form.password.data or ""):
+            # session is set inside authenticate_user
+            flash("Welcome back.", "success")
             return redirect(url_for('dashboard'))
         else:
-            error_message = "Invalid username or password. Please try again."
-    return render_template_string("""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Login - QRS</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+            # generic on purpose
+            flash("Invalid username or password.", "danger")
 
-    <!-- SRI kept EXACTLY the same -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/orbitron.css') }}" integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-          integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+    return _attach_cookie(render_template_string(LOGIN_TPL, form=form))
 
-    <style>
-        body {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            color: #ffffff;
-            font-family: 'Roboto', sans-serif;
-        }
-        /* Transparent navbar like Home */
-        .navbar {
-            background-color: transparent !important;
-        }
-        .navbar .nav-link { color: #fff; }
-        .navbar .nav-link:hover { color: #66ff66; }
-
-        .container { max-width: 400px; margin-top: 100px; }
-        .Spotd { padding: 30px; background-color: rgba(255, 255, 255, 0.1); border: none; border-radius: 15px; }
-        .error-message { color: #ff4d4d; }
-        .brand { 
-            font-family: 'Orbitron', sans-serif;
-            font-size: 2.5rem; 
-            font-weight: bold; 
-            text-align: center; 
-            margin-bottom: 20px; 
-            background: -webkit-linear-gradient(#f0f, #0ff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        input, label, .btn, .error-message, a { color: #ffffff; }
-        input::placeholder { color: #cccccc; opacity: 0.7; }
-        .btn-primary { 
-            background-color: #00cc00; 
-            border-color: #00cc00; 
-            font-weight: bold;
-            transition: background-color 0.3s, border-color 0.3s;
-        }
-        .btn-primary:hover { 
-            background-color: #33ff33; 
-            border-color: #33ff33; 
-        }
-        a { text-decoration: none; }
-        a:hover { text-decoration: underline; color: #66ff66; }
-        @media (max-width: 768px) {
-            .container { margin-top: 50px; }
-            .brand { font-size: 2rem; }
-        }
-    </style>
-</head>
-<body>
-    <nav class="navbar navbar-expand-lg navbar-dark">
-        <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
-        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" 
-            aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-            <span class="navbar-toggler-icon"></span>
-        </button>
-
-        <!-- Right side: ONLY Login / Register (no Dashboard, no dropdown) -->
-        <div class="collapse navbar-collapse justify-content-end" id="navbarNav">
-            <ul class="navbar-nav">
-                <li class="nav-item"><a class="nav-link active" href="{{ url_for('login') }}">Login</a></li>
-                <li class="nav-item"><a class="nav-link" href="{{ url_for('register') }}">Register</a></li>
-            </ul>
-        </div>
-    </nav>
-
-    <div class="container">
-        <div class="Spotd shadow">
-            <div class="brand">QRS</div>
-            <h3 class="text-center">Login</h3>
-            {% if error_message %}
-            <p class="error-message text-center">{{ error_message }}</p>
-            {% endif %}
-            <form method="POST" novalidate>
-                {{ form.hidden_tag() }}
-                <div class="form-group">
-                    {{ form.username.label }}
-                    {{ form.username(class="form-control", placeholder="Enter your username") }}
-                </div>
-                <div class="form-group">
-                    {{ form.password.label }}
-                    {{ form.password(class="form-control", placeholder="Enter your password") }}
-                </div>
-                {{ form.submit(class="btn btn-primary btn-block") }}
-            </form>
-            <p class="mt-3 text-center">Don't have an account? <a href="{{ url_for('register') }}">Register here</a></p>
-        </div>
-    </div>
-
-    <!-- Tiny vanilla JS to make the navbar collapse work without adding new JS files/SRIs -->
-    <script>
-    document.addEventListener('DOMContentLoaded', function () {
-        var toggler = document.querySelector('.navbar-toggler');
-        var nav = document.getElementById('navbarNav');
-        if (toggler && nav) {
-            toggler.addEventListener('click', function () {
-                var isShown = nav.classList.toggle('show');
-                toggler.setAttribute('aria-expanded', isShown ? 'true' : 'false');
-            });
-        }
-    });
-    </script>
-</body>
-</html>
-    """,
-        form=form,
-        error_message=error_message)
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    # Get the registration flag from the environment variable, default is False
-    registration_enabled = os.getenv('REGISTRATION_ENABLED', 'false').lower() == 'true'
+    # already logged in? go to dashboard
+    if session.get('username'):
+        return redirect(url_for('dashboard'))
 
-    error_message = ""
     form = RegisterForm()
+    invite_required = not is_registration_enabled()
+
     if form.validate_on_submit():
-        username = form.username.data
-        password = form.password.data
-        invite_code = form.invite_code.data if not registration_enabled else None
-
-        success, message = register_user(username, password, invite_code)
-        if success:
-            flash(message, "success")
-            return redirect(url_for('login'))
+        ok, msg = register_user(
+            form.username.data or "",
+            form.password.data or "",
+            (form.invite_code.data or "").strip() or None
+        )
+        if ok:
+            flash("Registration successful.", "success")
+            return redirect(url_for('dashboard'))
         else:
-            error_message = message
+            # keep message generic (your register_user already logs specifics)
+            flash(msg or "Registration failed.", "danger")
 
-    return render_template_string("""
-<!DOCTYPE html>
+    return _attach_cookie(render_template_string(REGISTER_TPL, form=form, invite_required=invite_required))
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    flash("You have been logged out.", "info")
+    return redirect(url_for('home'))
+
+
+# --- Minimal SRI'd templates (same style as your app) ---
+
+LOGIN_TPL = r"""
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Register - QRS</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-
-    <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
-          integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
-    <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
-          integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
-          integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/fontawesome.min.css') }}"
-          integrity="sha256-rx5u3IdaOCszi7Jb18XD9HSn8bNiEgAqWJbdBvIYYyU=" crossorigin="anonymous">
-
-    <style>
-        body {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            color: #ffffff;
-            font-family: 'Roboto', sans-serif;
-        }
-        .navbar { background-color: transparent !important; }
-        .navbar .nav-link { color: #fff; }
-        .navbar .nav-link:hover { color: #66ff66; }
-        .container { max-width: 400px; margin-top: 100px; }
-        .walkd { padding: 30px; background-color: rgba(255, 255, 255, 0.1); border: none; border-radius: 15px; }
-        .error-message { color: #ff4d4d; }
-        .brand {
-            font-family: 'Orbitron', sans-serif;
-            font-size: 2.5rem;
-            font-weight: bold;
-            text-align: center;
-            margin-bottom: 20px;
-            background: -webkit-linear-gradient(#f0f, #0ff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        input, label, .btn, .error-message, a { color: #ffffff; }
-        input::placeholder { color: #cccccc; opacity: 0.7; }
-        .btn-primary {
-            background-color: #00cc00;
-            border-color: #00cc00;
-            font-weight: bold;
-            transition: background-color 0.3s, border-color 0.3s;
-        }
-        .btn-primary:hover {
-            background-color: #33ff33;
-            border-color: #33ff33;
-        }
-        a { text-decoration: none; }
-        a:hover { text-decoration: underline; color: #66ff66; }
-        @media (max-width: 768px) {
-            .container { margin-top: 50px; }
-            .brand { font-size: 2rem; }
-        }
-    </style>
+  <meta charset="utf-8">
+  <title>QRS — Login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- CSS (SRI) -->
+  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
+        integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
+        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
+        integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+  <style>
+    body{ background:#0b0f17; color:#eaf5ff; font-family:'Roboto',sans-serif; }
+    .card-g{ max-width:460px; margin:8vh auto; background:#ffffff10; border:1px solid #ffffff22;
+             border-radius:16px; box-shadow:0 24px 70px rgba(0,0,0,.55); padding:22px; }
+    .brand{ font-family:'Orbitron',sans-serif; text-align:center; font-weight:900; margin-bottom:12px; }
+    .form-control{ background:#0d1423; border:1px solid #ffffff22; color:#eaf5ff; }
+    .form-control:focus{ box-shadow:none; outline:2px solid #49c2ff55; }
+    .btn-acc{ background: linear-gradient(135deg, #7ae6ff, #2bd1ff); border:0; color:#07121f; font-weight:900; }
+    .muted{ color:#b8cfe4 }
+    a{ color:#9fb6ff; }
+  </style>
 </head>
 <body>
-    <!-- Navbar with Login / Register -->
-    <nav class="navbar navbar-expand-lg navbar-dark">
-        <a class="navbar-brand" href="{{ url_for('home') }}">QRS</a>
-        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav"
-            aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-            <span class="navbar-toggler-icon"></span>
-        </button>
+  <div class="card-g">
+    <div class="brand">Quantum Road Scanner</div>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for cat,msg in messages %}
+          <div class="alert alert-{{ 'danger' if cat=='danger' else cat }} py-2 my-2">{{ msg }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    <form method="POST" novalidate>
+      {{ form.hidden_tag() }}
+      <div class="mb-3">
+        <label class="form-label">Username</label>
+        {{ form.username(class="form-control", placeholder="Enter your username") }}
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Password</label>
+        {{ form.password(class="form-control", placeholder="Enter your password") }}
+      </div>
+      <div class="d-grid gap-2">
+        {{ form.submit(class="btn btn-acc") }}
+      </div>
+      <div class="mt-3 muted">No account? <a href="{{ url_for('register') }}">Register</a></div>
+    </form>
+  </div>
 
-        <div class="collapse navbar-collapse justify-content-end" id="navbarNav">
-            <ul class="navbar-nav">
-                <li class="nav-item"><a class="nav-link" href="{{ url_for('login') }}">Login</a></li>
-                <li class="nav-item"><a class="nav-link active" href="{{ url_for('register') }}">Register</a></li>
-            </ul>
-        </div>
-    </nav>
-
-    <div class="container">
-        <div class="walkd shadow">
-            <div class="brand">QRS</div>
-            <h3 class="text-center">Register</h3>
-            {% if error_message %}
-            <p class="error-message text-center">{{ error_message }}</p>
-            {% endif %}
-            <form method="POST" novalidate>
-                {{ form.hidden_tag() }}
-                <div class="form-group">
-                    {{ form.username.label }}
-                    {{ form.username(class="form-control", placeholder="Choose a username") }}
-                </div>
-                <div class="form-group">
-                    {{ form.password.label }}
-                    {{ form.password(class="form-control", placeholder="Choose a password") }}
-                    <small id="passwordStrength" class="form-text"></small>
-                </div>
-                {% if not registration_enabled %}
-                <div class="form-group">
-                    {{ form.invite_code.label }}
-                    {{ form.invite_code(class="form-control", placeholder="Enter invite code") }}
-                </div>
-                {% endif %}
-                {{ form.submit(class="btn btn-primary btn-block") }}
-            </form>
-            <p class="mt-3 text-center">Already have an account? <a href="{{ url_for('login') }}">Login here</a></p>
-        </div>
-    </div>
-
-    <script>
-    document.addEventListener('DOMContentLoaded', function () {
-        var toggler = document.querySelector('.navbar-toggler');
-        var nav = document.getElementById('navbarNav');
-        if (toggler && nav) {
-            toggler.addEventListener('click', function () {
-                var isShown = nav.classList.toggle('show');
-                toggler.setAttribute('aria-expanded', isShown ? 'true' : 'false');
-            });
-        }
-    });
-    </script>
+  <!-- JS (SRI) -->
+  <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
+          integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/popper.min.js') }}"
+          integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
+          integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
 </body>
 </html>
-    """, form=form, error_message=error_message, registration_enabled=registration_enabled)
+"""
+
+REGISTER_TPL = r"""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>QRS — Register</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- CSS (SRI) -->
+  <link href="{{ url_for('static', filename='css/roboto.css') }}" rel="stylesheet"
+        integrity="sha256-Sc7BtUKoWr6RBuNTT0MmuQjqGVQwYBK+21lB58JwUVE=" crossorigin="anonymous">
+  <link href="{{ url_for('static', filename='css/orbitron.css') }}" rel="stylesheet"
+        integrity="sha256-3mvPl5g2WhVLrUV4xX3KE8AV8FgrOz38KmWLqKXVh00=" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}"
+        integrity="sha256-Ww++W3rXBfapN8SZitAvc9jw2Xb+Ixt0rvDsmWmQyTo=" crossorigin="anonymous">
+  <style>
+    body{ background:#0b0f17; color:#eaf5ff; font-family:'Roboto',sans-serif; }
+    .card-g{ max-width:520px; margin:8vh auto; background:#ffffff10; border:1px solid #ffffff22;
+             border-radius:16px; box-shadow:0 24px 70px rgba(0,0,0,.55); padding:22px; }
+    .brand{ font-family:'Orbitron',sans-serif; text-align:center; font-weight:900; margin-bottom:12px; }
+    .form-control{ background:#0d1423; border:1px solid #ffffff22; color:#eaf5ff; }
+    .form-control:focus{ box-shadow:none; outline:2px solid #49c2ff55; }
+    .btn-acc{ background: linear-gradient(135deg, #7ae6ff, #2bd1ff); border:0; color:#07121f; font-weight:900; }
+    .muted{ color:#b8cfe4 }
+    .hint{ font-size:.9rem; color:#95b2cf }
+    a{ color:#9fb6ff; }
+  </style>
+</head>
+<body>
+  <div class="card-g">
+    <div class="brand">Create your QRS account</div>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for cat,msg in messages %}
+          <div class="alert alert-{{ 'danger' if cat=='danger' else cat }} py-2 my-2">{{ msg }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    <form method="POST" novalidate>
+      {{ form.hidden_tag() }}
+      <div class="mb-3">
+        <label class="form-label">Username</label>
+        {{ form.username(class="form-control", placeholder="Pick a username") }}
+      </div>
+      <div class="mb-2">
+        <label class="form-label">Password</label>
+        {{ form.password(class="form-control", placeholder="Min 8 chars: Aa1@...") }}
+        <div class="hint mt-1">Use at least 8 chars with upper, lower, number, and symbol.</div>
+      </div>
+      {% if invite_required %}
+      <div class="mb-3">
+        <label class="form-label">Invite Code</label>
+        {{ form.invite_code(class="form-control", placeholder="Required (format: XXXX...-HMAC)") }}
+        <div class="hint mt-1">Registration is invite-only. Enter a valid code.</div>
+      </div>
+      {% endif %}
+      <div class="d-grid gap-2">
+        {{ form.submit(class="btn btn-acc", value="Create Account") }}
+      </div>
+      <div class="mt-3 muted">Have an account? <a href="{{ url_for('login') }}">Login</a></div>
+    </form>
+  </div>
+
+  <!-- JS (SRI) -->
+  <script src="{{ url_for('static', filename='js/jquery.min.js') }}"
+          integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/popper.min.js') }}"
+          integrity="sha256-/ijcOLwFf26xEYAjW75FizKVo5tnTYiQddPZoLUHHZ8=" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"
+          integrity="sha256-ecWZ3XYM7AwWIaGvSdmipJ2l1F4bN9RXW6zgpeAiZYI=" crossorigin="anonymous"></script>
+</body>
+</html>
+"""
+
+
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
