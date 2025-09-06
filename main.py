@@ -2426,6 +2426,8 @@ def reverse_geocode(lat, lon, cities):
         return f"{nearest_city['name']}, {nearest_city['countrycode']}"
     return "Unknown Location"
 
+
+
 def generate_invite_code(length=24, use_checksum=True):
     if length < 16:
         raise ValueError("Invite code length must be at least 16 characters.")
