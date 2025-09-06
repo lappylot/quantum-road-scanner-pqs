@@ -2910,135 +2910,49 @@ Please assess the following:
     )
 
 async def run_openai_completion(prompt):
-
-    logger = logging.getLogger(__name__)
-
-    logger.debug("Entering run_openai_completion with prompt length: %d",
-                 len(prompt) if prompt else 0)
-
+    logger.debug("Entering run_openai_completion with prompt length: %d", len(prompt) if prompt else 0)
     max_retries = 5
-    backoff_factor = 2
-    delay = 1
-
     openai_api_key = os.getenv('OPENAI_API_KEY')
     if not openai_api_key:
         logger.error("OpenAI API key not found in environment variables.")
         logger.debug("Exiting run_openai_completion early due to missing API key.")
         return None
 
-    timeout = httpx.Timeout(120.0, connect=40.0, read=40.0, write=40.0)
-    url = "https://api.openai.com/v1/responses"
-
-    async def _extract_text_from_responses(payload: dict) -> Union[str, None]:
-
-        if isinstance(payload.get("text"), str) and payload["text"].strip():
-            return payload["text"].strip()
-
-        out = payload.get("output")
-        if isinstance(out, list) and out:
-            parts = []
-            for item in out:
-
-                if isinstance(item, str) and item.strip():
-                    parts.append(item.strip())
-                    continue
-                if not isinstance(item, dict):
-                    continue
-
-                content = item.get("content") or item.get("contents") or item.get("data") or []
-                if isinstance(content, list):
-                    for c in content:
-                        if isinstance(c, str) and c.strip():
-                            parts.append(c.strip())
-                        elif isinstance(c, dict):
-
-                            if "text" in c and isinstance(c["text"], str) and c["text"].strip():
-                                parts.append(c["text"].strip())
-                         
-                            elif "parts" in c and isinstance(c["parts"], list):
-                                for p in c["parts"]:
-                                    if isinstance(p, str) and p.strip():
-                                        parts.append(p.strip())
-
-                if isinstance(item.get("text"), str) and item["text"].strip():
-                    parts.append(item["text"].strip())
-            if parts:
-                return "\n\n".join(parts)
-
-
-        choices = payload.get("choices")
-        if isinstance(choices, list) and choices:
-            for ch in choices:
-                if isinstance(ch, dict):
- 
-                    message = ch.get("message") or ch.get("delta")
-                    if isinstance(message, dict):
-     
-                        content = message.get("content")
-                        if isinstance(content, str) and content.strip():
-                            return content.strip()
-                        if isinstance(content, list):
-                  
-                            for c in content:
-                                if isinstance(c, str) and c.strip():
-                                    return c.strip()
-                                if isinstance(c, dict) and isinstance(c.get("text"), str) and c["text"].strip():
-                                    return c["text"].strip()
-              
-                    if isinstance(ch.get("text"), str) and ch["text"].strip():
-                        return ch["text"].strip()
-
-        return None
+    timeout = httpx.Timeout(60.0, connect=20.0, read=20.0)
+    backoff_factor = 2
+    delay = 1
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         for attempt in range(1, max_retries + 1):
             try:
                 logger.debug("run_openai_completion attempt %d sending request.", attempt)
-
                 headers = {
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {openai_api_key}"
                 }
-
-                payload = {
-                    "model": "gpt-5",      
-                    "input": prompt,                
-                    "max_output_tokens": 1200,      
-                 
-                    "reasoning": {"effort": "minimal"},
-                
+                data = {
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.7
                 }
 
-                response = await client.post(url, json=payload, headers=headers)
-               
+                response = await client.post("https://api.openai.com/v1/chat/completions", json=data, headers=headers)
                 response.raise_for_status()
-
-                data = response.json()
-
-            
-                reply = await _extract_text_from_responses(data)
-                if reply:
-                    logger.info("run_openai_completion succeeded on attempt %d.", attempt)
-                    return reply.strip()
-                else:
-                    
-                    logger.error(
-                        "Responses API returned 200 but no usable text. Keys: %s",
-                        list(data.keys())
-                    )
-                   
+                result = response.json()
+                clean_content = result["choices"][0]["message"]["content"].strip()
+                logger.info("run_openai_completion succeeded on attempt %d.", attempt)
+                logger.debug("Exiting run_openai_completion with successful response.")
+                return clean_content
 
             except (httpx.TimeoutException, httpx.ConnectTimeout) as e:
                 logger.error("Attempt %d failed due to timeout: %s", attempt, e, exc_info=True)
-            except httpx.HTTPStatusError as e:
-              
-                body_text = None
-                try:
-                    body_text = e.response.json()
-                except Exception:
-                    body_text = e.response.text
-                logger.error("Responses API error (status=%s): %s", e.response.status_code, body_text)
-            except (httpx.RequestError, KeyError, json.JSONDecodeError, Exception) as e:
+            except httpx.RequestError as e:
+                logger.error("Attempt %d failed due to request error: %s", attempt, e, exc_info=True)
+            except KeyError as e:
+                logger.error("Attempt %d failed due to missing expected key in response: %s", attempt, e, exc_info=True)
+            except json.JSONDecodeError as e:
+                logger.error("Attempt %d failed due to JSON parsing error: %s", attempt, e, exc_info=True)
+            except Exception as e:
                 logger.error("Attempt %d failed due to unexpected error: %s", attempt, e, exc_info=True)
 
             if attempt < max_retries:
@@ -3047,8 +2961,9 @@ async def run_openai_completion(prompt):
                 delay *= backoff_factor
 
     logger.warning("All attempts to run_openai_completion have failed. Returning None.")
+    logger.debug("Exiting run_openai_completion with failure.")
     return None
-
+    
 
 class LoginForm(FlaskForm):
     username = StringField('Username',
