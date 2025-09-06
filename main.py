@@ -3690,40 +3690,77 @@ def register():
     """, form=form, error_message=error_message, registration_enabled=registration_enabled)
 
 
-
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
     if 'is_admin' not in session or not session.get('is_admin'):
         return redirect(url_for('dashboard'))
 
-    global registration_enabled
     message = ""
     new_invite_code = None
     form = SettingsForm()
-    if request.method == 'POST':
-        action = request.form.get('action')
-        if action == 'enable_registration':
-            registration_enabled = True
-            set_registration_enabled(True, get_user_id(session['username']))
-            message = "Registration has been enabled."
-        elif action == 'disable_registration':
-            registration_enabled = False
-            set_registration_enabled(False, get_user_id(session['username']))
-            message = "Registration has been disabled."
-        elif action == 'generate_invite_code':
-            new_invite_code = generate_secure_invite_code()
-            with sqlite3.connect(DB_FILE) as db:
+
+    try:
+        with sqlite3.connect(DB_FILE, timeout=30.0) as db:
+            db.execute("PRAGMA foreign_keys = ON")
+            cursor = db.cursor()
+            cursor.execute("SELECT value FROM config WHERE key = ?", ("registration_enabled",))
+            row = cursor.fetchone()
+            registration_enabled_db = bool(row and row[0] == '1')
+    except Exception as e:
+        logger.exception("Failed to read registration flag from DB: %s", e)
+        registration_enabled_db = True
+
+    if form.validate_on_submit():
+        action = request.form.get('action', '')
+        try:
+            with sqlite3.connect(DB_FILE, timeout=30.0) as db:
+                db.execute("PRAGMA foreign_keys = ON")
                 cursor = db.cursor()
-                cursor.execute("INSERT INTO invite_codes (code) VALUES (?)",
-                               (new_invite_code, ))
-                db.commit()
-            message = f"New invite code generated: {new_invite_code}"
+                if action == 'enable_registration':
+                    cursor.execute(
+                        "REPLACE INTO config (key, value) VALUES (?, ?)",
+                        ("registration_enabled", "1"),
+                    )
+                    db.commit()
+                    registration_enabled_db = True
+                    message = "Registration has been enabled."
+                elif action == 'disable_registration':
+                    cursor.execute(
+                        "REPLACE INTO config (key, value) VALUES (?, ?)",
+                        ("registration_enabled", "0"),
+                    )
+                    db.commit()
+                    registration_enabled_db = False
+                    message = "Registration has been disabled."
+                elif action == 'generate_invite_code':
+                    new_invite_code = generate_secure_invite_code()
+                    try:
+                        cursor.execute(
+                            "INSERT INTO invite_codes (code) VALUES (?)",
+                            (new_invite_code,),
+                        )
+                        db.commit()
+                        message = f"New invite code generated: {new_invite_code}"
+                    except sqlite3.IntegrityError:
+                        db.rollback()
+                        new_invite_code = None
+                        message = "Invite code collision occurred; please try again."
+                else:
+                    message = "Unrecognized action."
+        except Exception as e:
+            logger.exception("Failed to apply settings change: %s", e)
+            message = "Failed to apply settings change."
 
     invite_codes = []
-    with sqlite3.connect(DB_FILE) as db:
-        cursor = db.cursor()
-        cursor.execute("SELECT code FROM invite_codes WHERE is_used = 0")
-        invite_codes = [row[0] for row in cursor.fetchall()]
+    try:
+        with sqlite3.connect(DB_FILE, timeout=30.0) as db:
+            db.execute("PRAGMA foreign_keys = ON")
+            cursor = db.cursor()
+            cursor.execute("SELECT code FROM invite_codes WHERE is_used = 0")
+            invite_codes = [row[0] for row in cursor.fetchall()]
+    except Exception as e:
+        logger.exception("Failed to fetch invite codes: %s", e)
+        invite_codes = []
 
     return render_template_string("""
 <!DOCTYPE html>
@@ -3894,7 +3931,9 @@ def settings():
                                   message=message,
                                   new_invite_code=new_invite_code,
                                   invite_codes=invite_codes,
-                                  form=form)
+                                  form=form,
+                                  registration_enabled=registration_enabled_db,
+                                  active_page='settings')
 
 
 @app.route('/logout')
