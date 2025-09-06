@@ -225,10 +225,7 @@ def _gen_passphrase() -> str:
     return base64.urlsafe_b64encode(os.urandom(48)).decode().rstrip("=")
 
 def bootstrap_env_keys(strict_pq2: bool = True, echo_exports: bool = False) -> None:
-    """
-    Generates any missing secrets directly into os.environ (no files).
-    Safe to call multiple times. If echo_exports=True, prints export lines.
-    """
+    
     exports: list[tuple[str,str]] = []
 
     # 1) Ensure passphrase & salt
@@ -525,7 +522,7 @@ RATE_LIMIT_COUNT = 13
 RATE_LIMIT_WINDOW = timedelta(minutes=15)
 
 config_lock = threading.Lock()
-DB_FILE = Path('/var/data') / 'secure_data.db'
+DB_FILE = BASE_DIR / 'secure_data.db'
 EXPIRATION_HOURS = 65
 
 app.config.update(SESSION_COOKIE_SECURE=True,
