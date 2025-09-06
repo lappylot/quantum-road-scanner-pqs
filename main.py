@@ -2300,36 +2300,59 @@ def approximate_country(lat, lon, cities):
         return city.get('countrycode', 'UNKNOWN')
     return 'UNKNOWN'
 
+
 async def fetch_street_name_llm(lat: float, lon: float) -> str:
     
-
     openai_api_key = os.getenv("OPENAI_API_KEY")
     if not openai_api_key:
-        logger.error("OPENAI_API_KEY is missing. Falling back to local reverse_geocode.")
+        logger.error("OPENAI_API_KEY missing → falling back to local heuristic.")
         return reverse_geocode(lat, lon, cities)
 
+    
+    likely_country_code = approximate_country(lat, lon, cities)
+    nearest_city, distance_to_city = approximate_nearest_city(lat, lon, cities)
+
+    city_hint      = nearest_city.get("name", "Unknown") if nearest_city else "Unknown"
+    distance_hint  = f"{distance_to_city:.2f} km from {city_hint}" if nearest_city else ""
+
+    
     try:
-        cpu, ram = get_cpu_ram_usage()
-        qres = quantum_hazard_scan(cpu, ram)
-        ctx = f"Nearest city heuristic disabled—using OpenAI only.\nQuantum state: {qres}"
-        prompt = (
-            "[action]You are a precision reverse-geocoder. "
-            "Given coordinates, return \"City, County, State\" or \"Unknown Location\".[/action]\n"
-            f"[coords]Latitude: {lat}, Longitude: {lon}[/coords]\n"
-            f"[context]{ctx}[/context]\n"
-            "[format]City, County, State[/format]"
-        )
+        cpu_usage, ram_usage   = get_cpu_ram_usage()
+        quantum_results        = quantum_hazard_scan(cpu_usage, ram_usage)
+        quantum_state_str      = str(quantum_results)
+    except Exception:
+        quantum_state_str = "Unavailable"
 
-        result = await run_openai_completion(prompt)
-        if not result or "unknown" in result.lower():
-            logger.info("OpenAI returned unknown; using local fallback.")
-            return reverse_geocode(lat, lon, cities)
+    llm_prompt = f"""
+[action]You are an Advanced Hypertime Nanobot Reverse-Geocoder with quantum synergy.
+Determine the most precise City, County, and State for the coordinates below.
+Only output a result if ≥ 98 % certain.[/action]
 
-        clean = bleach.clean(result.strip(), tags=[], strip=True)
-        return clean
+[coordinates] Latitude: {lat} Longitude: {lon} [/coordinates]
+
+[local_context]
+Nearest known city: {city_hint}
+Distance hint: {distance_hint}
+Likely country code: {likely_country_code}
+Quantum state: {quantum_state_str}
+[/local_context]
+
+[request_format] "City, County, State" or "Unknown Location" [/request_format]
+"""
+
+    try:
+        openai_result = await run_openai_completion(llm_prompt)
+        if not openai_result:
+            raise RuntimeError("Empty response from OpenAI")
+
+        cleaned = bleach.clean(openai_result.strip(), tags=[], strip=True)
+        if "unknown" in cleaned.lower():
+            raise RuntimeError("Model uncertain")
+
+        return cleaned
 
     except Exception as e:
-        logger.error("OpenAI geocoding failed: %s", e, exc_info=True)
+        logger.error("LLM reverse-geocode failed → %s; using fallback.", e)
         return reverse_geocode(lat, lon, cities)
 
 def save_street_name_to_db(lat: float, lon: float, street_name: str):
