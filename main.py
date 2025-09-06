@@ -5463,11 +5463,7 @@ def settings():
 
 
 
-@app.route('/logout')
-def logout():
-    session.pop('username', None)
-    session.pop('is_admin', None)
-    return redirect(url_for('home'))
+
 
 
 @app.route('/view_report/<int:report_id>', methods=['GET'])
