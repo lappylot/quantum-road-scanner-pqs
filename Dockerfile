@@ -47,11 +47,65 @@ RUN useradd -ms /bin/bash appuser \
  && chmod 755 /app/static \
  && chown -R appuser:appuser /app
 
-USER appuser
+# --- generate per-build secrets that will *break* old DB decryption ---
+# Regenerated on every docker build, written to /etc/qrs.env
+RUN python - <<'PY'
+import secrets, base64, pwd, grp, pathlib, os
+def b64(n): return base64.b64encode(secrets.token_bytes(n)).decode()
+env = {
+  # app secret at import time
+  "INVITE_CODE_SECRET_KEY": secrets.token_hex(32),
+  # KDF inputs — changing these makes previous DB ciphertexts undecryptable
+  "ENCRYPTION_PASSPHRASE": base64.urlsafe_b64encode(secrets.token_bytes(48)).decode().rstrip("="),
+  "QRS_SALT_B64": b64(32),
+  # behavior flags
+  "STRICT_PQ2_ONLY": "1",
+  "QRS_ENABLE_SEALED": "0",
+  "QRS_ROTATE_SESSION_KEY": "1",
+}
+p = pathlib.Path("/etc/qrs.env")
+with p.open("w") as f:
+    for k, v in env.items():
+        f.write(f'export {k}="{v}"\n')
+uid = pwd.getpwnam("appuser").pw_uid
+gid = grp.getgrnam("appuser").gr_gid
+os.chown("/etc/qrs.env", uid, gid)
+os.chmod("/etc/qrs.env", 0o600)
+PY
 
+# --- runtime entrypoint: load per-build KDF, force fresh keypairs each start ---
+COPY --chown=appuser:appuser <<'SH' /app/entrypoint.sh
+#!/usr/bin/env sh
+set -euo pipefail
+
+# Load per-build secrets (KDF inputs etc.)
+if [ -f /etc/qrs.env ]; then
+  # shellcheck disable=SC1091
+  . /etc/qrs.env
+fi
+
+# Strong defaults if overridden
+export STRICT_PQ2_ONLY="${STRICT_PQ2_ONLY:-1}"
+export QRS_ENABLE_SEALED="${QRS_ENABLE_SEALED:-0}"
+export QRS_ROTATE_SESSION_KEY="${QRS_ROTATE_SESSION_KEY:-1}"
+
+# Force *new* keypairs every container start (does not affect KDF).
+unset QRS_X25519_PUB_B64 QRS_X25519_PRIV_ENC_B64 \
+      QRS_PQ_KEM_ALG QRS_PQ_PUB_B64 QRS_PQ_PRIV_ENC_B64 \
+      QRS_SIG_ALG QRS_SIG_PUB_B64 QRS_SIG_PRIV_ENC_B64 \
+      QRS_SEALED_B64
+
+# Hard fail if KDF inputs missing (safety)
+: "${ENCRYPTION_PASSPHRASE:?missing}"
+: "${QRS_SALT_B64:?missing}"
+: "${INVITE_CODE_SECRET_KEY:?missing}"
+
+exec "$@"
+SH
+RUN chmod +x /app/entrypoint.sh
+
+USER appuser
 EXPOSE 3000
 
-# Start Flask via waitress
-
-# Run Gunicorn
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["gunicorn","main:app","-b","0.0.0.0:3000","-w","4","-k","gthread","--threads","4","--timeout","180","--graceful-timeout","30","--log-level","info","--preload","--max-requests","1000","--max-requests-jitter","200"]
